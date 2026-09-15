@@ -1,0 +1,10 @@
+{
+  "cmake.configureSettings": {
+    "CMAKE_TOOLCHAIN_FILE": "C:/Project/vcpkg/scripts/buildsystems/vcpkg.cmake"
+  },
+  "files.encoding": "utf8",
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "cmake.debugConfig": {
+    "cwd": "${workspaceFolder}"
+  }
+}
