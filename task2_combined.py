@@ -33,14 +33,15 @@ Runs in three stages from one script, one CSV load:
     matrices, comparison chart).
 
   STAGE 2 (Demo viewer, for the presentation video):
-    Uses the exact same model as Stage 0 - SVM (RBF, C=10) trained on
-    TSRD_external only, never on the 84 - so the demo's live accuracy
-    genuinely earns whatever it shows instead of trivially hitting 100% by
-    training on and then re-predicting the same 84 images. Falls back to
-    kNN trained on all loaded data (clearly labelled as a trivial self-match,
-    not a real accuracy figure) if TSRD_external isn't available. Walks
-    through every image listed in inputFiles.txt (one filename per line, per
-    the project brief) in a popup window, overlaying the predicted sign name
+    Trains all 3 classifiers (SVM, Random Forest, Logistic Regression) the
+    same way Stage 0 does - on TSRD_external only, never on the 84 - so the
+    demo's live accuracy genuinely earns whatever it shows instead of
+    trivially hitting 100% by training on and then re-predicting the same 84
+    images. Falls back to training all 3 on all loaded data (clearly
+    labelled as a trivial self-match, not a real accuracy figure) if
+    TSRD_external isn't available. Walks through every image listed in
+    inputFiles.txt (one filename per line, per the project brief) in a
+    popup window, overlaying each classifier's prediction as its own line
     (green = correct, red = wrong). Add more lines to inputFiles.txt and
     rerun Task 1's feature extractor first to demo beyond the 84 provided
     images (rubric item (d)); falls back to every already-loaded image if
@@ -73,9 +74,8 @@ matplotlib.use("Agg")  # save-only: no popup windows for the evaluation charts
 import matplotlib.pyplot as plt
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
 import warnings
@@ -436,16 +436,25 @@ def run_evaluation(df):
 # =================================================================
 # STAGE 2: Live demo viewer (for the presentation video)
 # =================================================================
+# Short on-screen labels for the demo overlay - full names/hyperparameters
+# live in make_classifiers().
+DEMO_SHORT_LABELS = {
+    "SVM (RBF, C=10)": "SVM",
+    "Random Forest (300 trees, depth=12)": "RandomForest",
+    "Logistic Regression": "LogReg",
+}
+
+
 def run_demo(df):
     df = df.copy()
+    classifiers = make_classifiers()
     if os.path.exists(EXTERNAL_CSV_PATH):
-        # Same model as Stage 0 - trained on TSRD_external ONLY, never on df
-        # (the 84) - so the demo's live accuracy genuinely earns whatever it
-        # shows instead of trivially hitting 100% (kNN self-matching data
-        # it was trained on). Reuses load_external_data() and
-        # make_classifiers()'s SVM entry directly rather than reimplementing
-        # the pipeline, so this can never silently drift from the number
-        # Stage 0 reports (different k, different C, different filtering).
+        # Same training protocol as Stage 0 - trained on TSRD_external ONLY,
+        # never on df (the 84) - so the demo's live accuracy genuinely earns
+        # whatever it shows instead of trivially matching data it trained
+        # on. All 3 classifiers share one scaler/selector fit on training
+        # data only, exactly like run_external_evaluation(), so this can
+        # never silently drift from the numbers Stage 0 reports.
         ext = load_external_data()
         X_ext = ext[FEAT_COLS].values
         y_ext = ext["Label"].values
@@ -456,31 +465,23 @@ def run_demo(df):
         selector = SelectKBest(f_classif, k=min(N_SELECT_FEATURES, X_ext_scaled.shape[1]))
         X_ext_sel = selector.fit_transform(X_ext_scaled, y_ext)
 
-        clf = make_classifiers()["SVM (RBF, C=10)"]
-        clf.fit(X_ext_sel, y_ext)
-
         X_demo_scaled = scaler.transform(df[FEAT_COLS].values)   # fitted scaler - no refit
         X_demo_sel = selector.transform(X_demo_scaled)           # fitted selector - no refit
-        df["Predicted"] = clf.predict(X_demo_sel)
-        model_desc = f"SVM (RBF, C=10) trained on {len(ext)} external images - matches Stage 0"
+        for name, clf in classifiers.items():
+            clf.fit(X_ext_sel, y_ext)
+            df[f"Predicted__{name}"] = clf.predict(X_demo_sel)
+        model_desc = f"All 3 classifiers trained on {len(ext)} external images - matches Stage 0"
     else:
-        print(f"NOTE: {EXTERNAL_CSV_PATH} not found - falling back to kNN trained "
-              f"on all loaded data. This is a trivial self-match (not a real "
-              f"accuracy figure) - see report for the honest Stage 0/1 numbers.")
-        X = df[FEAT_COLS].values
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        le = LabelEncoder()
-        y_enc = le.fit_transform(df["Label"].values)
-
+        print(f"NOTE: {EXTERNAL_CSV_PATH} not found - falling back to training all "
+              f"3 classifiers on all loaded data. This is a trivial self-match "
+              f"(not a real accuracy figure) - see report for the honest Stage 0/1 numbers.")
+        X_scaled = StandardScaler().fit_transform(df[FEAT_COLS].values)
         selector = SelectKBest(f_classif, k=min(N_SELECT_FEATURES, X_scaled.shape[1]))
-        X_scaled = selector.fit_transform(X_scaled, y_enc)
-
-        knn = KNeighborsClassifier(n_neighbors=1, metric="cosine")
-        knn.fit(X_scaled, y_enc)
-        df["Predicted"] = le.inverse_transform(knn.predict(X_scaled))
-        model_desc = "kNN trained on all loaded data (fallback - no external data found)"
+        X_scaled = selector.fit_transform(X_scaled, df["Label"].values)
+        for name, clf in classifiers.items():
+            clf.fit(X_scaled, df["Label"].values)
+            df[f"Predicted__{name}"] = clf.predict(X_scaled)
+        model_desc = "All 3 classifiers trained on all loaded data (fallback - no external data found)"
 
     by_filename = df.set_index("Filename", drop=False).to_dict("index")
 
@@ -498,7 +499,8 @@ def run_demo(df):
               f"falling back to every image already loaded ({len(names)}).")
 
     cv2.namedWindow("Task 2 - Recognition Demo", cv2.WINDOW_AUTOSIZE)
-    shown, correct, missing, no_features = 0, 0, 0, 0
+    shown, missing, no_features = 0, 0, 0
+    correct = {name: 0 for name in classifiers}
     for name in names:
         base = os.path.basename(name)
         row = by_filename.get(base)
@@ -529,17 +531,23 @@ def run_demo(df):
         if scale > 1.0:
             img = cv2.resize(img, (int(w * scale), int(h * scale)))
 
-        predicted, true_label = row["Predicted"], row["Label"]
-        is_correct = predicted == true_label
-        colour = (0, 180, 0) if is_correct else (0, 0, 255)
+        true_label = row["Label"]
+        y_offset = 24
+        for clf_name in classifiers:
+            predicted = row[f"Predicted__{clf_name}"]
+            is_correct = predicted == true_label
+            correct[clf_name] += is_correct
+            colour = (0, 180, 0) if is_correct else (0, 0, 255)
+            label = DEMO_SHORT_LABELS.get(clf_name, clf_name)
+            cv2.putText(img, f"{label}: {predicted}", (10, y_offset),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
+            y_offset += 23
 
-        cv2.putText(img, f"Predicted: {predicted}", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
-        cv2.putText(img, f"Ground truth: {true_label}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(img, f"Ground truth: {true_label}", (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(img, base, (10, img.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
         cv2.imshow("Task 2 - Recognition Demo", img)
         shown += 1
-        correct += is_correct
         key = cv2.waitKey(0 if WAIT_FOR_KEYPRESS else 800) & 0xFF
         if key == ord('q'):
             print("Quit early by user.")
@@ -549,7 +557,9 @@ def run_demo(df):
     print(f"\nModel: {model_desc}")
     print(f"Shown: {shown}  Missing image files: {missing}  No computed features: {no_features}")
     if shown:
-        print(f"Correct: {correct}/{shown} = {correct/shown*100:.2f}%")
+        for clf_name in classifiers:
+            label = DEMO_SHORT_LABELS.get(clf_name, clf_name)
+            print(f"{label}: {correct[clf_name]}/{shown} = {correct[clf_name]/shown*100:.2f}%")
 
 
 if __name__ == "__main__":
