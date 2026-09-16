@@ -33,11 +33,15 @@ Runs in three stages from one script, one CSV load:
     matrices, comparison chart).
 
   STAGE 2 (Demo viewer, for the presentation video):
-    Trains the best classifier (kNN, k=1, cosine) on ALL available data and
-    walks through every image listed in inputFiles.txt (one filename per
-    line, per the project brief) in a popup window, overlaying the predicted
-    sign name (green = correct, red = wrong) so you can visually confirm
-    recognition during the live demo. Add more lines to inputFiles.txt and
+    Uses the exact same model as Stage 0 - SVM (RBF, C=10) trained on
+    TSRD_external only, never on the 84 - so the demo's live accuracy
+    genuinely earns whatever it shows instead of trivially hitting 100% by
+    training on and then re-predicting the same 84 images. Falls back to
+    kNN trained on all loaded data (clearly labelled as a trivial self-match,
+    not a real accuracy figure) if TSRD_external isn't available. Walks
+    through every image listed in inputFiles.txt (one filename per line, per
+    the project brief) in a popup window, overlaying the predicted sign name
+    (green = correct, red = wrong). Add more lines to inputFiles.txt and
     rerun Task 1's feature extractor first to demo beyond the 84 provided
     images (rubric item (d)); falls back to every already-loaded image if
     inputFiles.txt is missing.
@@ -422,20 +426,51 @@ def run_evaluation(df):
 # STAGE 2: Live demo viewer (for the presentation video)
 # =================================================================
 def run_demo(df):
-    X = df[FEAT_COLS].values
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    le = LabelEncoder()
-    y_enc = le.fit_transform(df["Label"].values)
-
-    selector = SelectKBest(f_classif, k=min(N_SELECT_FEATURES, X_scaled.shape[1]))
-    X_scaled = selector.fit_transform(X_scaled, y_enc)
-
-    knn = KNeighborsClassifier(n_neighbors=1, metric="cosine")
-    knn.fit(X_scaled, y_enc)
     df = df.copy()
-    df["Predicted"] = le.inverse_transform(knn.predict(X_scaled))
+    if os.path.exists(EXTERNAL_CSV_PATH):
+        # Same model as Stage 0 - trained on TSRD_external ONLY, never on df
+        # (the 84) - so the demo's live accuracy genuinely earns whatever it
+        # shows instead of trivially hitting 100% (kNN self-matching data
+        # it was trained on). Reuses load_external_data() and
+        # make_classifiers()'s SVM entry directly rather than reimplementing
+        # the pipeline, so this can never silently drift from the number
+        # Stage 0 reports (different k, different C, different filtering).
+        ext = load_external_data()
+        X_ext = ext[FEAT_COLS].values
+        y_ext = ext["Label"].values
+
+        scaler = StandardScaler().fit(X_ext)
+        X_ext_scaled = scaler.transform(X_ext)
+
+        selector = SelectKBest(f_classif, k=min(N_SELECT_FEATURES, X_ext_scaled.shape[1]))
+        X_ext_sel = selector.fit_transform(X_ext_scaled, y_ext)
+
+        clf = make_classifiers()["SVM (RBF, C=10)"]
+        clf.fit(X_ext_sel, y_ext)
+
+        X_demo_scaled = scaler.transform(df[FEAT_COLS].values)   # fitted scaler - no refit
+        X_demo_sel = selector.transform(X_demo_scaled)           # fitted selector - no refit
+        df["Predicted"] = clf.predict(X_demo_sel)
+        model_desc = f"SVM (RBF, C=10) trained on {len(ext)} external images - matches Stage 0"
+    else:
+        print(f"NOTE: {EXTERNAL_CSV_PATH} not found - falling back to kNN trained "
+              f"on all loaded data. This is a trivial self-match (not a real "
+              f"accuracy figure) - see report for the honest Stage 0/1 numbers.")
+        X = df[FEAT_COLS].values
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        le = LabelEncoder()
+        y_enc = le.fit_transform(df["Label"].values)
+
+        selector = SelectKBest(f_classif, k=min(N_SELECT_FEATURES, X_scaled.shape[1]))
+        X_scaled = selector.fit_transform(X_scaled, y_enc)
+
+        knn = KNeighborsClassifier(n_neighbors=1, metric="cosine")
+        knn.fit(X_scaled, y_enc)
+        df["Predicted"] = le.inverse_transform(knn.predict(X_scaled))
+        model_desc = "kNN trained on all loaded data (fallback - no external data found)"
+
     by_filename = df.set_index("Filename", drop=False).to_dict("index")
 
     # Per the project brief: the demo reads its input file names from
@@ -500,9 +535,10 @@ def run_demo(df):
             break
 
     cv2.destroyAllWindows()
-    print(f"\nShown: {shown}  Missing image files: {missing}  No computed features: {no_features}")
+    print(f"\nModel: {model_desc}")
+    print(f"Shown: {shown}  Missing image files: {missing}  No computed features: {no_features}")
     if shown:
-        print(f"Correct (train-on-all demo model): {correct}/{shown} = {correct/shown*100:.2f}%")
+        print(f"Correct: {correct}/{shown} = {correct/shown*100:.2f}%")
 
 
 if __name__ == "__main__":
