@@ -54,10 +54,11 @@ import cv2
 import pandas as pd
 import numpy as np
 from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import accuracy_score, f1_score
@@ -124,13 +125,18 @@ class LabelSafeKNN:
 def make_classifiers():
     # Six genuinely different algorithm families - not hyperparameter variants
     # of the same one (e.g. SVM-linear/SVM-RBF or kNN-euclidean/kNN-cosine
-    # would only count as two families, not four).
+    # would only count as two families, not four). Gradient boosting was
+    # tried here first but badly underfit this feature set (32.9% TRAIN
+    # accuracy on its own 4584 rows) and classic GradientBoostingClassifier,
+    # while better, took ~18 minutes for one fit - too slow for the 84-fold
+    # LOO loop in Stage 1. Naive Bayes fits both constraints and is a
+    # genuinely different (generative/probabilistic) paradigm from the rest.
     return {
         "kNN (k=1, cosine)": LabelSafeKNN(n_neighbors=1, metric="cosine"),
         "SVM (RBF, C=10)": SVC(kernel="rbf", C=10),
         "Random Forest (300 trees, depth=12)": RandomForestClassifier(
             n_estimators=300, max_depth=12, random_state=42, n_jobs=-1),
-        "Gradient Boosting (hist)": HistGradientBoostingClassifier(random_state=42),
+        "Gaussian Naive Bayes": GaussianNB(),
         "MLP": MLPClassifier(hidden_layer_sizes=(100,), max_iter=2000, random_state=42),
         "Logistic Regression": LogisticRegression(max_iter=2000, C=1.0),
     }
