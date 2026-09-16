@@ -12,18 +12,25 @@ Runs in three stages from one script, one CSV load:
     instead of 1-2, so this is a genuine measure of recognition rate rather
     than a small-data artifact. Needs TSRD_external/task1_combined_features.csv
     (run Task2Demo.exe against the TSRD_external image set to generate it);
-    skipped with a note if that file is missing.
+    skipped with a note if that file is missing. Saves task2_external_
+    results_summary.csv (accuracy/precision/recall/F1 per classifier),
+    task2_external_per_class_predictions.csv, one confusion-matrix PNG per
+    classifier, and a classifier-comparison bar chart.
 
   STAGE 1 (LOO-CV evaluation, for the report - the small-data baseline):
-    Leave-One-Out Cross-Validation across 6 classifiers on the 84 originals
-    only. Each fold standardises features then keeps the top N_SELECT_FEATURES
-    by ANOVA F-score (fit on the training fold only, so no leakage) before the
+    Leave-One-Out Cross-Validation across our 3 classifiers (SVM, Random
+    Forest, Logistic Regression - deliberately not overlapping with the
+    groupmate's KNN/ANN/Naive Bayes half of Task 2, so the team's combined
+    submission covers 6 distinct algorithms) on the 84 originals only. Each
+    fold standardises features then keeps the top N_SELECT_FEATURES by
+    ANOVA F-score (fit on the training fold only, so no leakage) before the
     classifier sees them - with 979 raw features and ~83 training rows per
     fold, this curbs the curse of dimensionality and lifted every classifier
-    in testing. 22 of 45 classes have only one example each, so those are
+    in testing. 27 of 48 classes have only one example each, so those are
     mathematically unlearnable here - compare against Stage 0 to see what the
-    external data bought. Prints the comparison table and saves
-    task2_results_summary.csv + task2_per_class_predictions.csv.
+    external data bought. Saves the same kinds of outputs as Stage 0
+    (task2_results_summary.csv, task2_per_class_predictions.csv, confusion
+    matrices, comparison chart).
 
   STAGE 2 (Demo viewer, for the presentation video):
     Trains the best classifier (kNN, k=1, cosine) on ALL available data and
@@ -48,20 +55,22 @@ Usage:
 Needs: pip install opencv-python pandas scikit-learn
 """
 import os
+import re
 import sys
 import argparse
 import cv2
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # save-only: no popup windows for the evaluation charts
+import matplotlib.pyplot as plt
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.feature_selection import SelectKBest, f_classif
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -102,44 +111,70 @@ FEAT_COLS = SHAPE_COLS + HU_COLS + HOG_COLS + HIST_COLS
 # With 979 raw features but only ~83 training rows per LOO fold, every classifier
 # was drowning in noise dimensions. Ranking features by ANOVA F-score and keeping
 # the top N (re-fit per fold, so no leakage) consistently raised LOO accuracy
-# across all 6 classifiers in testing; 350 was the sweep optimum. See report.
+# in testing (swept while comparing a wider set of classifiers before trimming
+# to the 3 below); 350 was the sweep optimum. See report.
 N_SELECT_FEATURES = 350
 
 
-class LabelSafeKNN:
-    """KNeighborsClassifier wrapper that encodes string labels internally to
-    avoid a scikit-learn internal bug where predict() fails on string class
-    labels for non-default metrics (manhattan, cosine, ...)."""
-    def __init__(self, **kwargs):
-        self.knn = KNeighborsClassifier(**kwargs)
-        self.le = LabelEncoder()
-
-    def fit(self, X, y):
-        self.knn.fit(X, self.le.fit_transform(y))
-        return self
-
-    def predict(self, X):
-        return self.le.inverse_transform(self.knn.predict(X))
-
-
 def make_classifiers():
-    # Six genuinely different algorithm families - not hyperparameter variants
-    # of the same one (e.g. SVM-linear/SVM-RBF or kNN-euclidean/kNN-cosine
-    # would only count as two families, not four). Gradient boosting was
-    # tried here first but badly underfit this feature set (32.9% TRAIN
-    # accuracy on its own 4584 rows) and classic GradientBoostingClassifier,
-    # while better, took ~18 minutes for one fit - too slow for the 84-fold
-    # LOO loop in Stage 1. Naive Bayes fits both constraints and is a
-    # genuinely different (generative/probabilistic) paradigm from the rest.
+    # 3 classifiers, deliberately non-overlapping with the groupmate's half of
+    # Task 2 (KNN, ANN, Naive Bayes) so the team's combined submission covers
+    # 6 genuinely different algorithms with no duplication. SVM/RandomForest/
+    # LogisticRegression are margin-based, bagging-ensemble, and linear-
+    # discriminative respectively - three more distinct paradigms.
     return {
-        "kNN (k=1, cosine)": LabelSafeKNN(n_neighbors=1, metric="cosine"),
         "SVM (RBF, C=10)": SVC(kernel="rbf", C=10),
         "Random Forest (300 trees, depth=12)": RandomForestClassifier(
             n_estimators=300, max_depth=12, random_state=42, n_jobs=-1),
-        "Gaussian Naive Bayes": GaussianNB(),
-        "MLP": MLPClassifier(hidden_layer_sizes=(100,), max_iter=2000, random_state=42),
         "Logistic Regression": LogisticRegression(max_iter=2000, C=1.0),
     }
+
+
+def sanitize_filename(name):
+    return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+
+
+def save_confusion_matrix(y_true, y_pred, title, path):
+    labels = sorted(set(y_true) | set(y_pred))
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    n = len(labels)
+    fig, ax = plt.subplots(figsize=(max(6, n * 0.35), max(5, n * 0.35)))
+    ax.imshow(cm, cmap="Reds")
+    ax.set_xticks(range(n)); ax.set_xticklabels(labels, rotation=90, fontsize=6)
+    ax.set_yticks(range(n)); ax.set_yticklabels(labels, fontsize=6)
+    ax.set_xlabel("Predicted"); ax.set_ylabel("Actual")
+    ax.set_title(title, fontsize=10)
+    vmax = max(cm.max(), 1)
+    for i in range(n):
+        for j in range(n):
+            v = cm[i, j]
+            if v:
+                ax.text(j, i, str(v), ha="center", va="center", fontsize=6,
+                        color="white" if v > vmax / 2 else "black")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def save_classifier_comparison(results, title, path):
+    names = list(results.keys())
+    metrics = ["acc", "precision", "recall", "f1"]
+    metric_labels = ["Accuracy", "Precision", "Recall", "F1-score"]
+    x = np.arange(len(metrics))
+    width = 0.8 / len(names)
+    fig, ax = plt.subplots(figsize=(11, 6))
+    for i, name in enumerate(names):
+        vals = [results[name][m] for m in metrics]
+        bars = ax.bar(x + i * width, vals, width, label=name)
+        ax.bar_label(bars, fmt="%.2f", fontsize=6, padding=1)
+    ax.set_xticks(x + width * (len(names) - 1) / 2)
+    ax.set_xticklabels(metric_labels)
+    ax.set_ylim(0, 1.08)
+    ax.set_title(title)
+    ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.06), ncol=3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
 
 
 def load_data():
@@ -232,18 +267,25 @@ def run_external_evaluation(df):
     X_train = selector.fit_transform(X_train, y_train)
     X_test = selector.transform(X_test)
 
-    print(f"\n{'Classifier':<38}{'Accuracy':>10}{'F1(macro)':>12}")
-    print("-" * 60)
+    print(f"\n{'Classifier':<38}{'Accuracy':>10}{'Precision':>12}{'Recall':>10}{'F1(macro)':>12}")
+    print("-" * 82)
     results, best_name, best_acc = {}, None, -1
     for name, clf in make_classifiers().items():
         clf.fit(X_train, y_train)
         y_pred = clf.predict(X_test)
         acc = accuracy_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred, average="macro", zero_division=0)
+        rec = recall_score(y_test, y_pred, average="macro", zero_division=0)
         f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
-        results[name] = {"acc": acc, "f1_macro": f1, "predictions": y_pred}
-        print(f"{name:<38}{acc*100:>9.2f}%{f1:>12.3f}")
+        results[name] = {"acc": acc, "precision": prec, "recall": rec, "f1": f1, "predictions": y_pred}
+        print(f"{name:<38}{acc*100:>9.2f}%{prec*100:>11.2f}%{rec*100:>9.2f}%{f1:>12.3f}")
         if acc > best_acc:
             best_acc, best_name = acc, name
+        save_confusion_matrix(y_test, y_pred, f"Stage 0 (external training) - {name}",
+                               os.path.join(RESULTS_DIR, f"task2_external_confusion_{sanitize_filename(name)}.png"))
+
+    save_classifier_comparison(results, "Stage 0 - Classifier Comparison (trained on external TSRD data)",
+                                os.path.join(RESULTS_DIR, "task2_external_classifier_comparison.png"))
 
     per_class_df = pd.DataFrame({
         "Filename": df["Filename"].values, "SignID": df["SignID"].values,
@@ -253,13 +295,14 @@ def run_external_evaluation(df):
     per_class_df.to_csv(os.path.join(RESULTS_DIR, "task2_external_per_class_predictions.csv"), index=False)
 
     summary_df = pd.DataFrame([
-        {"Classifier": name, "Acc": r["acc"], "F1Macro": r["f1_macro"]}
+        {"Classifier": name, "Acc": r["acc"], "Precision": r["precision"], "Recall": r["recall"], "F1Macro": r["f1"]}
         for name, r in results.items()
     ])
     summary_df.to_csv(os.path.join(RESULTS_DIR, "task2_external_results_summary.csv"), index=False)
     print(f"\nBest: {best_name} -> {best_acc*100:.2f}% on all {len(df)} held-out images "
           f"(trained on {len(ext)} external images, zero overlap)")
-    print("Saved: task2_external_results_summary.csv, task2_external_per_class_predictions.csv")
+    print("Saved: task2_external_results_summary.csv, task2_external_per_class_predictions.csv, "
+          "task2_external_classifier_comparison.png, task2_external_confusion_<classifier>.png")
 
 
 # =================================================================
@@ -304,18 +347,26 @@ def run_evaluation(df):
             clf.fit(train_x_s, train_y)
             preds[name][i] = clf.predict(test_x_s)[0]
 
-    print(f"\n{'Classifier':<38}{'Accuracy':>10}{'ExclSingleton':>15}{'F1(macro)':>12}")
-    print("-" * 76)
+    print(f"\n{'Classifier':<38}{'Accuracy':>10}{'ExclSingleton':>15}{'Precision':>12}{'Recall':>10}{'F1(macro)':>12}")
+    print("-" * 98)
     results, best_name, best_acc = {}, None, -1
     for name in make_classifiers():
         y_pred = np.array(preds[name])
         acc = accuracy_score(y_orig, y_pred)
         acc_excl = accuracy_score(y_orig[non_singleton_mask], y_pred[non_singleton_mask])
+        prec = precision_score(y_orig, y_pred, average="macro", zero_division=0)
+        rec = recall_score(y_orig, y_pred, average="macro", zero_division=0)
         f1 = f1_score(y_orig, y_pred, average="macro", zero_division=0)
-        results[name] = {"acc": acc, "acc_excl_singleton": acc_excl, "f1_macro": f1, "predictions": y_pred}
-        print(f"{name:<38}{acc*100:>9.2f}%{acc_excl*100:>14.2f}%{f1:>12.3f}")
+        results[name] = {"acc": acc, "acc_excl_singleton": acc_excl, "precision": prec,
+                          "recall": rec, "f1": f1, "predictions": y_pred}
+        print(f"{name:<38}{acc*100:>9.2f}%{acc_excl*100:>14.2f}%{prec*100:>11.2f}%{rec*100:>9.2f}%{f1:>12.3f}")
         if acc > best_acc:
             best_acc, best_name = acc, name
+        save_confusion_matrix(y_orig, y_pred, f"Stage 1 (LOO-CV) - {name}",
+                               os.path.join(RESULTS_DIR, f"task2_confusion_{sanitize_filename(name)}.png"))
+
+    save_classifier_comparison(results, "Stage 1 - Classifier Comparison (Leave-One-Out CV, 84 images only)",
+                                os.path.join(RESULTS_DIR, "task2_classifier_comparison.png"))
 
     per_class_df = pd.DataFrame({
         "Filename": filenames_orig, "SignID": originals["SignID"].values,
@@ -325,13 +376,15 @@ def run_evaluation(df):
     per_class_df.to_csv(os.path.join(RESULTS_DIR, "task2_per_class_predictions.csv"), index=False)
 
     summary_df = pd.DataFrame([
-        {"Classifier": name, "Acc": r["acc"], "AccExclSingleton": r["acc_excl_singleton"], "F1Macro": r["f1_macro"]}
+        {"Classifier": name, "Acc": r["acc"], "AccExclSingleton": r["acc_excl_singleton"],
+         "Precision": r["precision"], "Recall": r["recall"], "F1Macro": r["f1"]}
         for name, r in results.items()
     ])
     summary_df.to_csv(os.path.join(RESULTS_DIR, "task2_results_summary.csv"), index=False)
     print(f"\nBest: {best_name} -> {results[best_name]['acc']*100:.2f}% "
           f"({results[best_name]['acc_excl_singleton']*100:.2f}% excl. singleton)")
-    print("Saved: task2_results_summary.csv, task2_per_class_predictions.csv")
+    print("Saved: task2_results_summary.csv, task2_per_class_predictions.csv, "
+          "task2_classifier_comparison.png, task2_confusion_<classifier>.png")
 
 
 # =================================================================
