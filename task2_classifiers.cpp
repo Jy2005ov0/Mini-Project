@@ -570,7 +570,7 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
     // See NAIVE_BAYES_PCA_DIMS above - fit PCA on training data only (no
     // leakage), then project both train and test through it just for the
     // Naive Bayes path. KNN/ANN don't estimate a covariance matrix, so they
-    // aren't affected by this and keep using the full 144-dim features.
+    // aren't affected by this and keep using the full numFeatures-dim features.
     PCA bayesPCA(trainingData, Mat(), PCA::DATA_AS_ROW, NAIVE_BAYES_PCA_DIMS);
     Mat trainingDataBayes = bayesPCA.project(trainingData);
     Mat verificationDataBayes = bayesPCA.project(verificationData);
