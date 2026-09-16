@@ -385,7 +385,7 @@ def run_evaluation(df):
                                os.path.join(RESULTS_DIR, f"task2_confusion_{sanitize_filename(name)}.png"))
 
     save_classifier_comparison(results, "Stage 1 - Classifier Comparison (Leave-One-Out CV, 84 images only)",
-                                os.path.join(RESULTS_DIR, "task2_classifier_comparison.png"))
+                                os.path.join(RESULTS_DIR, "task2_py_classifier_comparison.png"))
 
     per_class_df = pd.DataFrame({
         "Filename": filenames_orig, "SignID": originals["SignID"].values,
@@ -403,7 +403,7 @@ def run_evaluation(df):
     print(f"\nBest: {best_name} -> {results[best_name]['acc']*100:.2f}% "
           f"({results[best_name]['acc_excl_singleton']*100:.2f}% excl. singleton)")
     print("Saved: task2_results_summary.csv, task2_per_class_predictions.csv, "
-          "task2_classifier_comparison.png, task2_confusion_<classifier>.png")
+          "task2_py_classifier_comparison.png, task2_confusion_<classifier>.png")
 
 
 # =================================================================
