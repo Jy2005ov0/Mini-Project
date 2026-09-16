@@ -60,7 +60,6 @@ Needs: pip install opencv-python pandas scikit-learn
 """
 import os
 import re
-import sys
 import argparse
 import cv2
 import pandas as pd
@@ -115,9 +114,16 @@ FEAT_COLS = SHAPE_COLS + HU_COLS + HOG_COLS + HIST_COLS
 
 # With 979 raw features but only ~83 training rows per LOO fold, every classifier
 # was drowning in noise dimensions. Ranking features by ANOVA F-score and keeping
-# the top N (re-fit per fold, so no leakage) consistently raised LOO accuracy
-# in testing (swept while comparing a wider set of classifiers before trimming
-# to the 3 below); 350 was the sweep optimum. See report.
+# the top N (re-fit per fold, so no leakage) is a large, robust win: cutting
+# ~979 features to a few hundred consistently and substantially raises every
+# classifier's accuracy. The exact value of N within that good range (300 vs
+# 350 vs 400) is NOT reliably tunable by sweeping against the 84-image test
+# set - tried that, and it turned out to be test-set overfitting: the
+# "improvement" from 350 to 300 amounted to 1-2 flipped predictions out of 84
+# (noise), and honest validation using only the external training pool (never
+# touching the 84 test images) picked a different value per classifier (350,
+# 300, 750) and didn't even agree that 300 was best. 350 kept as a reasonable,
+# not-cherry-picked default. See report for the full methodology note.
 N_SELECT_FEATURES = 350
 
 
@@ -496,7 +502,7 @@ def run_demo(df):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-demo", action="store_true", help="run evaluation only, skip the popup window")
-    parser.add_argument("--no-eval", action="store_true", help="skip the Leave-One-Out evaluation, go straight to the demo window")
+    parser.add_argument("--no-eval", action="store_true", help="skip the Leave-One-Out evaluation (Stage 1)")
     parser.add_argument("--no-external", action="store_true", help="skip the external-data (TSRD) evaluation")
     args = parser.parse_args()
 
