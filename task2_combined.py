@@ -88,6 +88,7 @@ EXTERNAL_CSV_PATH = os.path.join(PROJECT_ROOT, "TSRD_external", "task1_combined_
 INPUT_ROOT = os.path.join(PROJECT_ROOT, "Input")  # contains colour folders
 INPUT_FILES_PATH = os.path.join(PROJECT_ROOT, "inputFiles.txt")
 RESULTS_DIR = PROJECT_ROOT
+SHARED_FEATURES_PATH = os.path.join(PROJECT_ROOT, "shared_selected_features.txt")
 WAIT_FOR_KEYPRESS = True      # False = auto-advance the demo window after a short delay
 
 ID_LABEL = {
@@ -301,6 +302,16 @@ def run_external_evaluation(df):
     selector = SelectKBest(f_classif, k=min(N_SELECT_FEATURES, X_train.shape[1]))
     X_train = selector.fit_transform(X_train, y_train)
     X_test = selector.transform(X_test)
+
+    # Export the exact selected column names so the C++ side (groupmate's
+    # classifiers) can be trained/tested on the identical feature set - a
+    # fair comparison needs both halves seeing the same information, not
+    # just the same feature COUNT (his own 144-dim HOG truncation vs this
+    # ANOVA-selected 350 spanning shape/Hu/HOG/colour was not comparable).
+    selected_cols = [c for c, keep in zip(FEAT_COLS, selector.get_support()) if keep]
+    with open(SHARED_FEATURES_PATH, "w") as f:
+        f.write("\n".join(selected_cols) + "\n")
+    print(f"Exported {len(selected_cols)} selected feature names to {SHARED_FEATURES_PATH}")
 
     print(f"\n{'Classifier':<38}{'Accuracy':>10}{'Precision':>12}{'Recall':>10}{'F1(macro)':>12}")
     print("-" * 82)

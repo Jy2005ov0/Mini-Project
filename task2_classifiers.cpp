@@ -23,12 +23,14 @@
 #include <opencv2/ml.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <map>
 #include <numeric>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -36,6 +38,23 @@
 using namespace std;
 using namespace cv;
 using namespace cv::ml;
+
+// Shared with main()'s single-CSV evaluation and the external-training
+// evaluation added below, so both always agree on the feature width.
+static const int HOG_FEATURES = 144;
+
+// NormalBayesClassifier fits a full covariance matrix per class, which is
+// singular whenever a class has fewer training examples than feature
+// dimensions - with up to 57 classes and some having as few as 2 external
+// training images, that's true for most classes at 144-dim. A singular
+// covariance makes that class's discriminant score blow up and win every
+// single prediction regardless of input (observed: Naive Bayes predicted
+// the same one class for all 84 test images). Reducing to this many PCA
+// dimensions (fit on training data only) keeps the estimate stable for any
+// class with >10 real examples; classes below that remain fundamentally
+// hard for any classifier - same small-data limit as elsewhere in this
+// project, not something dimensionality reduction can fix.
+static const int NAIVE_BAYES_PCA_DIMS = 10;
 
 // ============================================================================
 // Helper 1: split one CSV line
@@ -73,7 +92,20 @@ struct Sample {
 // Helper 3: read Task 1 CSV
 // ============================================================================
 
-vector<Sample> loadTask1CSV(const string& csvPath) {
+// Original 144-column selection (hog0..hog143), kept as the default so the
+// existing single-CSV evaluation in main() is untouched.
+vector<string> defaultHogColumns() {
+    vector<string> cols;
+    for (int h = 0; h < HOG_FEATURES; h++) cols.push_back("hog" + to_string(h));
+    return cols;
+}
+
+// featureColumns lets a caller load an arbitrary named set of columns
+// instead of the hardcoded hog0..hog143 - used by evaluateWithExternalTraining()
+// below to load the exact same ANOVA-selected feature set the Python side
+// uses, for a fair classifier-vs-classifier comparison (same information,
+// different algorithm) rather than comparing different feature engineering.
+vector<Sample> loadTask1CSV(const string& csvPath, const vector<string>& featureColumns = defaultHogColumns()) {
     vector<Sample> samples;
     ifstream in(csvPath);
 
@@ -88,15 +120,16 @@ vector<Sample> loadTask1CSV(const string& csvPath) {
 
     int filenameCol = -1;
     int signIDCol = -1;
-    vector<int> hogCols(144, -1);
+    int numFeatures = (int)featureColumns.size();
+    vector<int> featureCols(numFeatures, -1);
 
     for (int c = 0; c < (int)header.size(); c++) {
         if (header[c] == "Filename") filenameCol = c;
         if (header[c] == "SignID") signIDCol = c;
 
-        for (int h = 0; h < 144; h++) {
-            if (header[c] == "hog" + to_string(h))
-                hogCols[h] = c;
+        for (int h = 0; h < numFeatures; h++) {
+            if (header[c] == featureColumns[h])
+                featureCols[h] = c;
         }
     }
 
@@ -105,9 +138,9 @@ vector<Sample> loadTask1CSV(const string& csvPath) {
         return samples;
     }
 
-    for (int h = 0; h < 144; h++) {
-        if (hogCols[h] < 0) {
-            cout << "Error: hog" << h << " column is missing." << endl;
+    for (int h = 0; h < numFeatures; h++) {
+        if (featureCols[h] < 0) {
+            cout << "Error: " << featureColumns[h] << " column is missing." << endl;
             return samples;
         }
     }
@@ -123,12 +156,12 @@ vector<Sample> loadTask1CSV(const string& csvPath) {
         Sample s;
         s.filename = cells[filenameCol];
         s.signID = cells[signIDCol];
-        s.hog.resize(144, 0.0f);
+        s.hog.resize(numFeatures, 0.0f);
 
         bool valid = true;
-        for (int h = 0; h < 144; h++) {
+        for (int h = 0; h < numFeatures; h++) {
             try {
-                s.hog[h] = stof(cells[hogCols[h]]);
+                s.hog[h] = stof(cells[featureCols[h]]);
             }
             catch (...) {
                 valid = false;
@@ -419,13 +452,204 @@ Mat drawModelComparison(const vector<EvaluationResult>& results) {
     return image;
 }
 
+// Reads one column name per line - used to load the exact feature set the
+// Python side's SelectKBest chose (shared_selected_features.txt), so this
+// evaluation compares classifiers on identical information rather than
+// different feature engineering.
+vector<string> readColumnList(const string& path) {
+    vector<string> cols;
+    ifstream in(path);
+    if (!in.is_open()) return cols;
+    string line;
+    while (getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) cols.push_back(line);
+    }
+    return cols;
+}
+
+// ============================================================================
+// Helper 8: external-training evaluation
+//
+// Train KNN/ANN/Naive Bayes on TSRD_external only, then predict on the
+// original 84 project images - the same protocol as the Python side's
+// Stage 0, so the two halves of Task 2 can be compared head-to-head on the
+// exact same held-out test set. Reuses normalizeTrainingData() and
+// evaluateModel() rather than reimplementing them, so this can't silently
+// drift from the single-CSV evaluation's own logic. Also loads the same
+// feature COLUMNS the Python side selected (shared_selected_features.txt),
+// instead of this file's own 144-column HOG truncation, so this is a fair
+// classifier-vs-classifier comparison, not a features-vs-features one.
+// ============================================================================
+
+void evaluateWithExternalTraining(const string& trainCsvPath, const string& testCsvPath) {
+    if (!std::filesystem::exists(trainCsvPath)) {
+        cout << "\nExternal-training evaluation skipped: " << trainCsvPath << " not found.\n";
+        return;
+    }
+
+    vector<string> featureColumns = readColumnList("shared_selected_features.txt");
+    if (featureColumns.empty()) {
+        cout << "\nshared_selected_features.txt not found or empty - falling back to "
+             << "this file's own " << HOG_FEATURES << "-column HOG selection "
+             << "(run task2_combined.py's Stage 0 first to generate a fair shared "
+             << "feature list).\n";
+        featureColumns = defaultHogColumns();
+    }
+    int numFeatures = (int)featureColumns.size();
+    cout << "\nUsing " << numFeatures << " shared feature column(s) for this evaluation.\n";
+
+    vector<Sample> trainSamples = loadTask1CSV(trainCsvPath, featureColumns);
+    vector<Sample> testSamples = loadTask1CSV(testCsvPath, featureColumns);
+    if (trainSamples.empty() || testSamples.empty()) {
+        cout << "\nExternal-training evaluation skipped: could not load data.\n";
+        return;
+    }
+
+    cout << "\n================================================================\n";
+    cout << "EXTERNAL-TRAINING EVALUATION (train on TSRD_external, test on our 84)\n";
+    cout << "================================================================\n";
+    cout << "Training images (external): " << trainSamples.size() << "\n";
+    cout << "Test images (ours)        : " << testSamples.size() << "\n";
+
+    // Class universe = every SignID seen in either set, so a class that only
+    // appears in the test set (zero external examples) still gets a slot -
+    // it will simply always be misclassified, same as the Python side.
+    set<string> classSet, trainClasses;
+    for (auto& s : trainSamples) { classSet.insert(s.signID); trainClasses.insert(s.signID); }
+    for (auto& s : testSamples) classSet.insert(s.signID);
+    vector<string> classNames(classSet.begin(), classSet.end());
+    int numberOfClasses = (int)classNames.size();
+    map<string, int> classToNumber;
+    for (int i = 0; i < numberOfClasses; i++) classToNumber[classNames[i]] = i;
+
+    int zeroExampleClasses = 0;
+    for (auto& c : classNames) if (!trainClasses.count(c)) zeroExampleClasses++;
+    if (zeroExampleClasses)
+        cout << zeroExampleClasses << " class(es) have zero external training examples "
+             << "(always misclassified - same caveat as the Python side).\n";
+
+    Mat trainingData((int)trainSamples.size(), numFeatures, CV_32F);
+    Mat trainingLabels((int)trainSamples.size(), 1, CV_32S);
+    for (int r = 0; r < (int)trainSamples.size(); r++) {
+        trainingLabels.at<int>(r, 0) = classToNumber[trainSamples[r].signID];
+        for (int c = 0; c < numFeatures; c++)
+            trainingData.at<float>(r, c) = trainSamples[r].hog[c];
+    }
+
+    Mat verificationData((int)testSamples.size(), numFeatures, CV_32F);
+    Mat verificationLabels((int)testSamples.size(), 1, CV_32S);
+    for (int r = 0; r < (int)testSamples.size(); r++) {
+        verificationLabels.at<int>(r, 0) = classToNumber[testSamples[r].signID];
+        for (int c = 0; c < numFeatures; c++)
+            verificationData.at<float>(r, c) = testSamples[r].hog[c];
+    }
+
+    vector<double> mean, sigma;
+    normalizeTrainingData(trainingData, verificationData, mean, sigma);
+
+    // ----- Train (identical setup to the single-CSV evaluation above) -----
+    Ptr<KNearest> knn = KNearest::create();
+    knn->setIsClassifier(true);
+    knn->setDefaultK(1);
+    knn->train(trainingData, ROW_SAMPLE, trainingLabels);
+
+    Mat annTrainingLabels = Mat::zeros(trainingData.rows, numberOfClasses, CV_32F);
+    for (int r = 0; r < trainingLabels.rows; r++)
+        annTrainingLabels.at<float>(r, trainingLabels.at<int>(r, 0)) = 1.0f;
+
+    Ptr<ANN_MLP> ann = ANN_MLP::create();
+    Mat layerSizes = (Mat_<int>(1, 3) << numFeatures, 64, numberOfClasses);
+    ann->setLayerSizes(layerSizes);
+    ann->setActivationFunction(ANN_MLP::SIGMOID_SYM, 1.0, 1.0);
+    ann->setTrainMethod(ANN_MLP::BACKPROP, 0.001, 0.1);
+    ann->setTermCriteria(TermCriteria(TermCriteria::MAX_ITER + TermCriteria::EPS, 2000, 1e-6));
+    theRNG().state = 12345;
+    ann->train(trainingData, ROW_SAMPLE, annTrainingLabels);
+
+    // See NAIVE_BAYES_PCA_DIMS above - fit PCA on training data only (no
+    // leakage), then project both train and test through it just for the
+    // Naive Bayes path. KNN/ANN don't estimate a covariance matrix, so they
+    // aren't affected by this and keep using the full 144-dim features.
+    PCA bayesPCA(trainingData, Mat(), PCA::DATA_AS_ROW, NAIVE_BAYES_PCA_DIMS);
+    Mat trainingDataBayes = bayesPCA.project(trainingData);
+    Mat verificationDataBayes = bayesPCA.project(verificationData);
+
+    Ptr<NormalBayesClassifier> bayes = NormalBayesClassifier::create();
+    bayes->train(trainingDataBayes, ROW_SAMPLE, trainingLabels);
+
+    // ----- Predict on the 84 (genuinely held out - never trained on) -----
+    vector<int> truth, predKNN, predANN, predBayes;
+    for (int i = 0; i < verificationData.rows; i++) {
+        truth.push_back(verificationLabels.at<int>(i, 0));
+
+        Mat knnResult;
+        float knnResponse = knn->findNearest(verificationData.row(i), 1, knnResult);
+        predKNN.push_back(cvRound(knnResponse));
+
+        Mat annOutput;
+        ann->predict(verificationData.row(i), annOutput);
+        Point maxLoc;
+        minMaxLoc(annOutput, nullptr, nullptr, nullptr, &maxLoc);
+        predANN.push_back(maxLoc.x);
+
+        float bayesResponse = bayes->predict(verificationDataBayes.row(i));
+        predBayes.push_back(cvRound(bayesResponse));
+    }
+
+    EvaluationResult knnResult = evaluateModel("KNN", truth, predKNN, numberOfClasses);
+    EvaluationResult annResult = evaluateModel("ANN", truth, predANN, numberOfClasses);
+    EvaluationResult bayesResult = evaluateModel("Naive Bayes", truth, predBayes, numberOfClasses);
+    vector<EvaluationResult> allResults = { knnResult, annResult, bayesResult };
+
+    cout << fixed << setprecision(4);
+    cout << "\nClassifier     Accuracy    Precision   Recall      F1-score    \n";
+    cout << string(65, '-') << "\n";
+    for (const auto& r : allResults) {
+        cout << left << setw(15) << r.modelName << setw(12) << r.accuracy
+             << setw(12) << r.precision << setw(12) << r.recall << setw(12) << r.f1 << "\n";
+    }
+
+    // Distinct filenames so this never collides with the single-CSV mode's
+    // own task2_*.csv/png output, or with the Python side's task2_external_*.
+    ofstream metricsFile("task2_cpp_external_metrics.csv");
+    if (metricsFile.is_open()) {
+        metricsFile << "Classifier,Accuracy,Precision,Recall,F1Score\n";
+        for (const auto& r : allResults)
+            metricsFile << r.modelName << "," << r.accuracy << "," << r.precision << ","
+                        << r.recall << "," << r.f1 << "\n";
+    }
+
+    ofstream predictionFile("task2_cpp_external_predictions.csv");
+    if (predictionFile.is_open()) {
+        predictionFile << "Filename,Truth,KNN,ANN,NaiveBayes\n";
+        for (int i = 0; i < (int)truth.size(); i++) {
+            predictionFile << testSamples[i].filename << "," << classNames[truth[i]] << ","
+                           << classNames[predKNN[i]] << "," << classNames[predANN[i]] << ","
+                           << classNames[predBayes[i]] << "\n";
+        }
+    }
+
+    imwrite("task2_cpp_external_knn_confusion_matrix.png", drawConfusionMatrix(knnResult, classNames));
+    imwrite("task2_cpp_external_ann_confusion_matrix.png", drawConfusionMatrix(annResult, classNames));
+    imwrite("task2_cpp_external_bayes_confusion_matrix.png", drawConfusionMatrix(bayesResult, classNames));
+    imwrite("task2_cpp_external_classifier_comparison.png", drawModelComparison(allResults));
+
+    cout << "\nFiles written:\n"
+         << "  task2_cpp_external_metrics.csv\n"
+         << "  task2_cpp_external_predictions.csv\n"
+         << "  task2_cpp_external_knn_confusion_matrix.png\n"
+         << "  task2_cpp_external_ann_confusion_matrix.png\n"
+         << "  task2_cpp_external_bayes_confusion_matrix.png\n"
+         << "  task2_cpp_external_classifier_comparison.png\n";
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
 
 int main() {
     const string csvPath = "task1_combined_features.csv";
-    const int HOG_FEATURES = 144;
 
     // We hold out one image per class for verification.
     // A class therefore needs at least 3 images so that Naive Bayes still has
@@ -761,6 +985,12 @@ int main() {
     cout << "  task2_ann_confusion_matrix.png" << endl;
     cout << "  task2_bayes_confusion_matrix.png" << endl;
     cout << "  task2_classifier_comparison.png" << endl;
+
+    // Second evaluation: same 3 classifiers, trained on TSRD_external instead
+    // of the internal split above, tested on the same 84 project images the
+    // Python side's Stage 0 uses - a genuine head-to-head between this
+    // file's classifiers and task2_combined.py's.
+    evaluateWithExternalTraining("TSRD_external/task1_combined_features.csv", csvPath);
 
     cout << "\nPress any key on an OpenCV window to finish." << endl;
     waitKey(0);
