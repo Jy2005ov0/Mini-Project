@@ -34,9 +34,13 @@ Runs in three stages from one script, one CSV load:
 
   STAGE 2 (Demo viewer, for the presentation video):
     Trains the best classifier (kNN, k=1, cosine) on ALL available data and
-    walks through every image in a popup window, overlaying the predicted
+    walks through every image listed in inputFiles.txt (one filename per
+    line, per the project brief) in a popup window, overlaying the predicted
     sign name (green = correct, red = wrong) so you can visually confirm
-    recognition during the live demo.
+    recognition during the live demo. Add more lines to inputFiles.txt and
+    rerun Task 1's feature extractor first to demo beyond the 84 provided
+    images (rubric item (d)); falls back to every already-loaded image if
+    inputFiles.txt is missing.
 
 These stages intentionally use different training regimes and answer
 different questions - Stage 0 and 1 report generalisation honestly (for the
@@ -79,6 +83,7 @@ CSV_PATH = os.path.join(PROJECT_ROOT, "task1_combined_features.csv")
 PARENT_MAP_PATH = os.path.join(PROJECT_ROOT, "parent_map.csv")
 EXTERNAL_CSV_PATH = os.path.join(PROJECT_ROOT, "TSRD_external", "task1_combined_features.csv")
 INPUT_ROOT = os.path.join(PROJECT_ROOT, "Input")  # contains colour folders
+INPUT_FILES_PATH = os.path.join(PROJECT_ROOT, "inputFiles.txt")
 RESULTS_DIR = PROJECT_ROOT
 WAIT_FOR_KEYPRESS = True      # False = auto-advance the demo window after a short delay
 
@@ -175,6 +180,20 @@ def save_classifier_comparison(results, title, path):
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
+
+
+def read_input_file_list(list_path=INPUT_FILES_PATH):
+    """Demo input list per the project brief: one image name (bare filename
+    or full path) per line. Tolerates blank lines and Windows line endings."""
+    if not os.path.exists(list_path):
+        return []
+    names = []
+    with open(list_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                names.append(line)
+    return names
 
 
 def load_data():
@@ -405,15 +424,46 @@ def run_demo(df):
     knn.fit(X_scaled, y_enc)
     df = df.copy()
     df["Predicted"] = le.inverse_transform(knn.predict(X_scaled))
+    by_filename = df.set_index("Filename", drop=False).to_dict("index")
+
+    # Per the project brief: the demo reads its input file names from
+    # inputFiles.txt (one per line), not by scanning a directory - this is
+    # also what lets the demo be extended beyond the 84 provided images
+    # (rubric item (d)): add more lines, rerun Task 1's feature extractor so
+    # the new rows land in task1_combined_features.csv, then rerun this.
+    names = read_input_file_list()
+    if names:
+        print(f"Read {len(names)} file name(s) from {INPUT_FILES_PATH}")
+    else:
+        names = df["Filename"].tolist()
+        print(f"NOTE: {INPUT_FILES_PATH} not found or empty - "
+              f"falling back to every image already loaded ({len(names)}).")
 
     cv2.namedWindow("Task 2 - Recognition Demo", cv2.WINDOW_AUTOSIZE)
-    shown, missing = 0, 0
-    for _, row in df.iterrows():
-        img_path = os.path.join(INPUT_ROOT, f"{row['GroundTruthColour']} Signs", row["Filename"])
-        img = cv2.imread(img_path)
+    shown, correct, missing, no_features = 0, 0, 0, 0
+    for name in names:
+        base = os.path.basename(name)
+        row = by_filename.get(base)
+
+        img = cv2.imread(name) if os.path.exists(name) else None
         if img is None:
-            print(f"WARNING: could not find image {img_path} - skipping.")
+            colours = [row["GroundTruthColour"]] if row is not None else []
+            colours += [c for c in ("Red", "Blue", "Yellow") if c not in colours]
+            for colour in colours:
+                candidate = os.path.join(INPUT_ROOT, f"{colour} Signs", base)
+                img = cv2.imread(candidate)
+                if img is not None:
+                    break
+        if img is None:
+            print(f"WARNING: could not find image for '{name}' - skipping.")
             missing += 1
+            continue
+
+        if row is None:
+            print(f"WARNING: no computed features for '{base}' (not in "
+                  f"task1_combined_features.csv) - add it to inputFiles.txt and "
+                  f"rerun Task 1's feature extractor first. Skipping.")
+            no_features += 1
             continue
 
         h, w = img.shape[:2]
@@ -422,23 +472,25 @@ def run_demo(df):
             img = cv2.resize(img, (int(w * scale), int(h * scale)))
 
         predicted, true_label = row["Predicted"], row["Label"]
-        colour = (0, 180, 0) if predicted == true_label else (0, 0, 255)
+        is_correct = predicted == true_label
+        colour = (0, 180, 0) if is_correct else (0, 0, 255)
 
         cv2.putText(img, f"Predicted: {predicted}", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
         cv2.putText(img, f"Ground truth: {true_label}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(img, row["Filename"], (10, img.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(img, base, (10, img.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
         cv2.imshow("Task 2 - Recognition Demo", img)
         shown += 1
+        correct += is_correct
         key = cv2.waitKey(0 if WAIT_FOR_KEYPRESS else 800) & 0xFF
         if key == ord('q'):
             print("Quit early by user.")
             break
 
     cv2.destroyAllWindows()
-    correct = (df["Predicted"] == df["Label"]).sum()
-    print(f"\nShown: {shown}  Missing image files: {missing}")
-    print(f"Correct (train-on-all demo model): {correct}/{len(df)} = {correct/len(df)*100:.2f}%")
+    print(f"\nShown: {shown}  Missing image files: {missing}  No computed features: {no_features}")
+    if shown:
+        print(f"Correct (train-on-all demo model): {correct}/{shown} = {correct/shown*100:.2f}%")
 
 
 if __name__ == "__main__":
