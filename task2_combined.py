@@ -243,7 +243,7 @@ def load_external_data():
     missing = df[df["Label"].isna()]
     if len(missing):
         print(f"External: dropping {len(missing)} row(s) with SignIDs outside our "
-              f"45 classes: {sorted(missing['SignID'].unique())}")
+              f"48 classes: {sorted(missing['SignID'].unique())}")
         df = df[df["Label"].notna()].reset_index(drop=True)
 
     for c in FEAT_COLS:
@@ -261,7 +261,7 @@ def load_external_data():
 def run_external_evaluation(df):
     """Train on the external TSRD pool, test on all 84 of our own images -
     a genuine held-out evaluation with real per-class training data, unlike
-    Stage 1's LOO-CV where 22 of 45 classes have only one example each. This
+    Stage 1's LOO-CV where 27 of 48 classes have only one example each. This
     is the number that reflects real-world recognition rate; Stage 1 is kept
     as the small-data baseline to show what the external data bought us."""
     if not os.path.exists(EXTERNAL_CSV_PATH):
@@ -269,6 +269,12 @@ def run_external_evaluation(df):
               "      Run Task2Demo.exe against the TSRD_external image set first "
               "(see report methodology) to regenerate it.")
         return
+
+    # Test only on originals, matching Stage 1 - currently a no-op (no
+    # parent_map.csv, so every row is already its own original) but without
+    # this, reintroducing augmentation would silently test on augmented
+    # duplicates too and inflate "tested on all 84" beyond the real 84.
+    df = df[df["IsOriginal"]].reset_index(drop=True)
 
     ext = load_external_data()
     print(f"External training pool: {len(ext)} images, {ext['Label'].nunique()} classes")
