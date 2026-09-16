@@ -86,11 +86,11 @@ ID_LABEL = {
     "027": "Roundabout", "028": "Cars only", "029": "Sound horn",
     "030": "Cyclist route", "031": "U-turn ahead",
     "032": "Junction/road merge ahead", "034": "General hazard", "035": "Pedestrian crossing",
-    "036": "Cyclist crossing", "037": "Children crossing", "038": "Slow",
+    "036": "Cyclist crossing", "037": "Children crossing", "038": "Bend right ahead",
     "040": "Steep descent", "042": "Slow", "043": "T-junction ahead",
-    "045": "Village/residential area", "046": "Bend ahead", "047": "Railway crossing",
-    "048": "Road works", "049": "Bend ahead", "050": "Railway crossing (gate)",
-    "051": "Road works",
+    "045": "Village/residential area", "046": "Double bend ahead", "047": "Railway crossing",
+    "048": "Road works", "049": "Winding road ahead", "050": "Railway crossing (gate)",
+    "051": "Accident-prone area",
 }
 
 SHAPE_COLS = ["solidity", "circularity", "fillRatio", "aspect", "vertices", "triRatio", "ellipseFit", "angleStdDev"]

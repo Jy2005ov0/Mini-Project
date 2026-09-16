@@ -58,7 +58,7 @@ Filename,SignID,TrueLabel,PredictedLabel,Correct
 032_1_0001_1_j.png,032,Junction/road merge ahead,Junction/road merge ahead,True
 032_1_0002_1_j.png,032,Junction/road merge ahead,Junction/road merge ahead,True
 034_1_0002.png,034,General hazard,General hazard,True
-034_1_0003_1_j.png,034,General hazard,Bend ahead,False
+034_1_0003_1_j.png,034,General hazard,Winding road ahead,False
 035_1_0002.png,035,Pedestrian crossing,Pedestrian crossing,True
 035_1_0003.png,035,Pedestrian crossing,Pedestrian crossing,True
 035_1_0004.png,035,Pedestrian crossing,Pedestrian crossing,True
@@ -68,18 +68,18 @@ Filename,SignID,TrueLabel,PredictedLabel,Correct
 037_0019.png,037,Children crossing,Children crossing,True
 037_0021.png,037,Children crossing,Children crossing,True
 037_1_0009.png,037,Children crossing,Children crossing,True
-038_0008.png,038,Slow,Slow,True
+038_0008.png,038,Bend right ahead,Bend right ahead,True
 040_0011.png,040,Steep descent,Steep descent,True
 042_0002_j.png,042,Slow,T-junction ahead,False
 042_0016_j.png,042,Slow,Slow,True
 043_1_0021.png,043,T-junction ahead,T-junction ahead,True
 045_1_0004.png,045,Village/residential area,Village/residential area,True
 045_1_0009.png,045,Village/residential area,Village/residential area,True
-046_0005_j.png,046,Bend ahead,Bend ahead,True
+046_0005_j.png,046,Double bend ahead,Double bend ahead,True
 047_0002.png,047,Railway crossing,T-junction ahead,False
 047_0005.png,047,Railway crossing,Railway crossing,True
 047_1_0003.png,047,Railway crossing,T-junction ahead,False
 048_0004.png,048,Road works,Road works,True
-049_1_0010.png,049,Bend ahead,Bend ahead,True
+049_1_0010.png,049,Winding road ahead,Winding road ahead,True
 050_1_0003.png,050,Railway crossing (gate),Railway crossing (gate),True
-051_0005_j.png,051,Road works,T-junction ahead,False
+051_0005_j.png,051,Accident-prone area,T-junction ahead,False
