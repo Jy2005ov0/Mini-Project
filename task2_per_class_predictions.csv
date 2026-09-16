@@ -1,16 +1,16 @@
 Filename,SignID,TrueLabel,PredictedLabel,Correct
 000_1_0002.png,000,Speed limit 5,Speed limit 5,True
-000_1_0013.png,000,Speed limit 5,No U-turn,False
+000_1_0013.png,000,Speed limit 5,Speed limit 5,True
 000_1_0018.png,000,Speed limit 5,Speed limit 5,True
 000_1_0034.png,000,Speed limit 5,Speed limit 5,True
-001_0004.png,001,Speed limit 15,Speed limit 40,False
+001_0004.png,001,Speed limit 15,Speed limit 15,True
 001_1_0009.png,001,Speed limit 15,Speed limit 15,True
 002_0036.png,002,Speed limit 30,Speed limit 40,False
 002_1_0010.png,002,Speed limit 30,Speed limit 50,False
 003_1_0034.png,003,Speed limit 40,Speed limit 30,False
 004_1_0020.png,004,Speed limit 50,Speed limit 30,False
-005_0030.png,005,Speed limit 60,Straight or right only,False
-005_1_0027.png,005,Speed limit 60,Speed limit 80,False
+005_0030.png,005,Speed limit 60,General hazard,False
+005_1_0027.png,005,Speed limit 60,Speed limit 50,False
 007_1_0006.png,007,Speed limit 80,Speed limit 30,False
 008_1_0008_1_j.png,008,No straight/left turn,No straight ahead,False
 010_1_0013.png,010,No straight ahead,No straight/left turn,False
@@ -19,15 +19,15 @@ Filename,SignID,TrueLabel,PredictedLabel,Correct
 012_1_0015.png,012,No left or right turn,No straight ahead,False
 013_0013.png,013,No right turn,No left or right turn,False
 014_1_0028.png,014,No lane change/merge,Speed limit 40,False
-015_1_0001.png,015,No U-turn,Speed limit 80,False
+015_1_0001.png,015,No U-turn,Speed limit 30,False
 016_1_0014.png,016,No motor vehicles,Cars only,False
 017_1_0017.png,017,No horn,No straight/left turn,False
 033_1_0001.png,033,Traffic signals ahead,Slow,False
 052_1_0008_1_j.png,052,Stop,Cars only,False
 055_1_0031.png,055,No entry,No entry (checkpoint),False
-056_1_0010.png,056,Yield,No U-turn,False
-057_0003_j.png,057,No entry (checkpoint),No motor vehicles,False
-020_0002_j.png,020,Straight or right only,Steep descent,False
+056_1_0010.png,056,Yield,Roundabout,False
+057_0003_j.png,057,No entry (checkpoint),No entry,False
+020_0002_j.png,020,Straight or right only,Right turn only,False
 020_0003.png,020,Straight or right only,Straight or right only,True
 020_0004.png,020,Straight or right only,Straight or right only,True
 020_0006.png,020,Straight or right only,Straight or right only,True
@@ -42,14 +42,14 @@ Filename,SignID,TrueLabel,PredictedLabel,Correct
 023_1_0005.png,023,"Straight, left or right only","Straight, left or right only",True
 024_1_0016.png,024,Right turn only,Right turn only,True
 024_1_0017.png,024,Right turn only,Right turn only,True
-026_1_0016.png,026,Keep right,Cyclist route,False
+026_1_0016.png,026,Keep right,No left turn,False
 027_0002.png,027,Roundabout,Roundabout,True
 027_0010.png,027,Roundabout,Roundabout,True
-027_0012.png,027,Roundabout,Speed limit 15,False
+027_0012.png,027,Roundabout,Roundabout,True
 028_0202.png,028,Cars only,Cars only,True
 028_1_0007.png,028,Cars only,Cars only,True
 028_1_0216.png,028,Cars only,Cars only,True
-029_1_0015.png,029,Sound horn,Cyclist route,False
+029_1_0015.png,029,Sound horn,Cars only,False
 030_1_0002.png,030,Cyclist route,Cyclist route,True
 030_1_0018_1_j.png,030,Cyclist route,Cyclist route,True
 030_1_0023.png,030,Cyclist route,Cyclist route,True
@@ -60,26 +60,26 @@ Filename,SignID,TrueLabel,PredictedLabel,Correct
 034_1_0002.png,034,General hazard,Slow,False
 034_1_0003_1_j.png,034,General hazard,Road works,False
 035_1_0002.png,035,Pedestrian crossing,Children crossing,False
-035_1_0003.png,035,Pedestrian crossing,Railway crossing,False
+035_1_0003.png,035,Pedestrian crossing,Pedestrian crossing,True
 035_1_0004.png,035,Pedestrian crossing,Pedestrian crossing,True
 036_1_0014.png,036,Cyclist crossing,Cyclist crossing,True
 036_1_0016.png,036,Cyclist crossing,Cyclist crossing,True
 036_1_0019.png,036,Cyclist crossing,Cyclist crossing,True
 037_0019.png,037,Children crossing,Children crossing,True
 037_0021.png,037,Children crossing,Children crossing,True
-037_1_0009.png,037,Children crossing,Pedestrian crossing,False
+037_1_0009.png,037,Children crossing,Slow,False
 038_0008.png,038,Slow,Steep descent,False
-040_0011.png,040,Steep descent,Slow,False
+040_0011.png,040,Steep descent,Children crossing,False
 042_0002_j.png,042,Slow,Traffic signals ahead,False
-042_0016_j.png,042,Slow,General hazard,False
+042_0016_j.png,042,Slow,Children crossing,False
 043_1_0021.png,043,T-junction ahead,General hazard,False
-045_1_0004.png,045,Village/residential area,T-junction ahead,False
-045_1_0009.png,045,Village/residential area,Cyclist crossing,False
-046_0005_j.png,046,Bend ahead,Slow,False
+045_1_0004.png,045,Village/residential area,Slow,False
+045_1_0009.png,045,Village/residential area,Children crossing,False
+046_0005_j.png,046,Bend ahead,Children crossing,False
 047_0002.png,047,Railway crossing,Railway crossing,True
 047_0005.png,047,Railway crossing,Cyclist crossing,False
 047_1_0003.png,047,Railway crossing,Railway crossing,True
-048_0004.png,048,Road works,Traffic signals ahead,False
+048_0004.png,048,Road works,Children crossing,False
 049_1_0010.png,049,Bend ahead,Slow,False
 050_1_0003.png,050,Railway crossing (gate),Slow,False
-051_0005_j.png,051,Road works,General hazard,False
+051_0005_j.png,051,Road works,Slow,False
