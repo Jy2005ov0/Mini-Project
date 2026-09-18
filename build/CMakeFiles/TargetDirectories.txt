@@ -1,3 +1,4 @@
 C:/Project/Mini Project/build/CMakeFiles/Task2Demo.dir
+C:/Project/Mini Project/build/CMakeFiles/Task2Classifiers.dir
 C:/Project/Mini Project/build/CMakeFiles/ALL_BUILD.dir
 C:/Project/Mini Project/build/CMakeFiles/ZERO_CHECK.dir

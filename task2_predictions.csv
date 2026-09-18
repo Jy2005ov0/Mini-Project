@@ -1,0 +1,12 @@
+Filename,Truth,KNN,ANN,NaiveBayes
+028_1_0007.png,Cars only,Cars only,Cars only,Cars only
+037_1_0009.png,Children crossing,Pedestrian crossing,Pedestrian crossing,Pedestrian crossing
+036_1_0014.png,Cyclist crossing,Children crossing,Children crossing,Children crossing
+030_1_0002.png,Cyclist route,Cyclist route,Cyclist route,Cyclist route
+035_1_0003.png,Pedestrian crossing,Pedestrian crossing,Railway crossing,Railway crossing
+047_1_0003.png,Railway crossing,Railway crossing,Railway crossing,Railway crossing
+027_0010.png,Roundabout,Roundabout,Roundabout,Roundabout
+000_1_0002.png,Speed limit 5,Speed limit 5,Speed limit 5,Speed limit 5
+021_0003.png,Straight ahead only,Straight ahead only,Straight ahead only,Straight ahead only
+020_0004.png,Straight or right only,Straight or right only,Straight or right only,Straight or right only
+023_1_0002_1_j.png,Straight/left/right only,Straight/left/right only,Straight/left/right only,Straight/left/right only

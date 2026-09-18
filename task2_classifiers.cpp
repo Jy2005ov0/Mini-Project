@@ -38,6 +38,7 @@
 using namespace std;
 using namespace cv;
 using namespace cv::ml;
+namespace fs = std::filesystem;
 
 // Shared with main()'s single-CSV evaluation and the external-training
 // evaluation added below, so both always agree on the feature width.
@@ -79,12 +80,17 @@ vector<string> splitCSV(const string& line) {
 
 // ============================================================================
 // Helper 2: structure for one row from Task 1
-// We only keep Filename, SignID and the 144 HOG values for Task 2.
+// We keep Filename, the original SignID and the selected feature values.
+// The real traffic-sign type used for classification is loaded separately
+// (see loadSignTypeLabels() below) from sign_type_labels.csv, since a SignID
+// is not automatically the correct class - different SignIDs can be the
+// same real sign type, or need consolidating after manual review.
 // ============================================================================
 
 struct Sample {
     string filename;
-    string signID;
+    string signID;      // kept only as a reference to the Task 1 CSV row
+    string signType;     // the real class used for Task 2 classification
     vector<float> hog;
 };
 
@@ -174,6 +180,157 @@ vector<Sample> loadTask1CSV(const string& csvPath, const vector<string>& feature
     }
 
     return samples;
+}
+
+// ============================================================================
+// Helper 3B: load the REAL traffic-sign type for every image
+//
+// IMPORTANT:
+// SignID is not automatically treated as the sign class. Different SignIDs may
+// contain the same type of traffic sign. Therefore Task 2 should train and test
+// using the actual sign type.
+//
+// The program expects:
+//     sign_type_labels.csv
+//
+// Format:
+//     Filename,SignID,SignType
+//
+// Example:
+//     020_0003.png,020,Keep right
+//
+// On the Python side (task2_combined.py), this file is generated and kept
+// complete automatically, pre-filled from its ID_LABEL dict for every image
+// in both the project's own CSV and TSRD_external - run that first if this
+// file doesn't exist yet or is missing rows for images this program needs.
+// If it's still missing entries after that, edit the CSV by hand and rerun.
+// ============================================================================
+
+// quiet: when the caller is going to filter out unlabelled samples and
+// continue anyway (e.g. evaluateWithExternalTraining(), which expects some
+// TSRD_external images to fall outside our mapped classes), skip the
+// per-image "Missing SignType" spam and the "before training" message,
+// which are misleading there since training proceeds regardless.
+bool loadSignTypeLabels(const string& labelPath,
+    vector<Sample>& samples, bool quiet = false) {
+
+    ifstream in(labelPath);
+
+    // No file at all: create a template that can be filled in by hand (or
+    // run task2_combined.py first, which fills it in automatically).
+    if (!in.is_open()) {
+        ofstream out(labelPath);
+
+        if (!out.is_open()) {
+            cout << "Error: could not create " << labelPath << endl;
+            return false;
+        }
+
+        out << "Filename,SignID,SignType\n";
+
+        for (const Sample& s : samples) {
+            out << fs::path(s.filename).filename().string()
+                << "," << s.signID << ",\n";
+        }
+
+        out.close();
+
+        cout << "\nCreated: " << labelPath << endl;
+        cout << "Run task2_combined.py first to fill this in automatically, "
+             << "or open this CSV and fill in the SignType column by hand." << endl;
+        cout << "Example:" << endl;
+        cout << "020_0003.png,020,Keep right" << endl;
+        cout << "\nAfter filling all sign types, save the CSV and run again." << endl;
+
+        return false;
+    }
+
+    string headerLine;
+    getline(in, headerLine);
+
+    vector<string> header = splitCSV(headerLine);
+
+    int filenameCol = -1;
+    int signTypeCol = -1;
+
+    for (int c = 0; c < (int)header.size(); c++) {
+        if (header[c] == "Filename")
+            filenameCol = c;
+
+        if (header[c] == "SignType")
+            signTypeCol = c;
+    }
+
+    if (filenameCol < 0 || signTypeCol < 0) {
+        cout << "Error: " << labelPath
+            << " must contain Filename and SignType columns." << endl;
+        return false;
+    }
+
+    // Store both the exact filename and the basename so the mapping works
+    // whether Task 1 stored a complete path or only a filename.
+    map<string, string> filenameToType;
+
+    string line;
+    while (getline(in, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+
+        if (line.empty())
+            continue;
+
+        vector<string> cells = splitCSV(line);
+
+        if (filenameCol >= (int)cells.size() ||
+            signTypeCol >= (int)cells.size())
+            continue;
+
+        string filename = cells[filenameCol];
+        string signType = cells[signTypeCol];
+
+        if (filename.empty() || signType.empty())
+            continue;
+
+        filenameToType[filename] = signType;
+        filenameToType[fs::path(filename).filename().string()] = signType;
+    }
+
+    int missingLabels = 0;
+
+    for (Sample& s : samples) {
+        string exactName = s.filename;
+        string baseName = fs::path(s.filename).filename().string();
+
+        auto exactIt = filenameToType.find(exactName);
+        auto baseIt = filenameToType.find(baseName);
+
+        if (exactIt != filenameToType.end()) {
+            s.signType = exactIt->second;
+        }
+        else if (baseIt != filenameToType.end()) {
+            s.signType = baseIt->second;
+        }
+        else {
+            s.signType.clear();
+            missingLabels++;
+
+            if (!quiet)
+                cout << "Missing SignType for: "
+                    << baseName << endl;
+        }
+    }
+
+    if (missingLabels > 0) {
+        if (!quiet) {
+            cout << "\n" << missingLabels
+                << " image(s) still have no SignType in "
+                << labelPath << endl;
+            cout << "Fill every missing SignType before training." << endl;
+        }
+        return false;
+    }
+
+    return true;
 }
 
 // ============================================================================
@@ -308,13 +465,20 @@ Mat drawConfusionMatrix(const EvaluationResult& result,
     const vector<string>& classNames) {
 
     int n = (int)classNames.size();
-    int cell = 40;
-    int leftMargin = 95;
-    int topMargin = 95;
-    int bottomMargin = 55;
 
-    int width = leftMargin + n * cell + 20;
-    int height = topMargin + n * cell + bottomMargin;
+    int cell = 45;
+    int leftMargin = 85;
+    int topMargin = 95;
+
+    // Class names are now full sign-type text (e.g. "Keep right"), much
+    // longer than a three-digit SignID. Use short labels C0, C1, ... inside
+    // the matrix and show the real traffic-sign type in a legend below.
+    int legendColumns = 2;
+    int legendRows = (n + legendColumns - 1) / legendColumns;
+    int legendHeight = 35 + legendRows * 28;
+
+    int width = max(900, leftMargin + n * cell + 40);
+    int height = topMargin + n * cell + legendHeight;
 
     Mat image(height, width, CV_8UC3, Scalar(255, 255, 255));
 
@@ -333,14 +497,14 @@ Mat drawConfusionMatrix(const EvaluationResult& result,
             maxValue = max(maxValue, result.confusion.at<int>(r, c));
 
     for (int c = 0; c < n; c++) {
-        putText(image, classNames[c],
-            Point(leftMargin + c * cell + 4, topMargin - 12),
+        putText(image, "C" + to_string(c),
+            Point(leftMargin + c * cell + 8, topMargin - 12),
             FONT_HERSHEY_SIMPLEX, 0.35, Scalar(0, 0, 0), 1);
     }
 
     for (int r = 0; r < n; r++) {
-        putText(image, classNames[r],
-            Point(48, topMargin + r * cell + 25),
+        putText(image, "C" + to_string(r),
+            Point(40, topMargin + r * cell + 28),
             FONT_HERSHEY_SIMPLEX, 0.35, Scalar(0, 0, 0), 1);
 
         for (int c = 0; c < n; c++) {
@@ -355,9 +519,29 @@ Mat drawConfusionMatrix(const EvaluationResult& result,
 
             Scalar textColour = (intensity > 130) ? Scalar(255, 255, 255) : Scalar(0, 0, 0);
             putText(image, to_string(value),
-                Point(box.x + 14, box.y + 25),
+                Point(box.x + 14, box.y + 27),
                 FONT_HERSHEY_SIMPLEX, 0.4, textColour, 1);
         }
+    }
+
+    int legendStartY = topMargin + n * cell + 32;
+
+    putText(image, "Class legend:",
+        Point(15, legendStartY),
+        FONT_HERSHEY_SIMPLEX, 0.48, Scalar(0, 0, 0), 1);
+
+    for (int i = 0; i < n; i++) {
+        int column = i % legendColumns;
+        int row = i / legendColumns;
+
+        int x = 20 + column * (width / 2);
+        int y = legendStartY + 28 + row * 28;
+
+        string label = "C" + to_string(i) + " = " + classNames[i];
+
+        putText(image, label,
+            Point(x, y),
+            FONT_HERSHEY_SIMPLEX, 0.38, Scalar(0, 0, 0), 1);
     }
 
     return image;
@@ -367,7 +551,8 @@ Mat drawConfusionMatrix(const EvaluationResult& result,
 // Helper 7: visualization comparing the 3 classifiers
 // ============================================================================
 
-Mat drawModelComparison(const vector<EvaluationResult>& results) {
+Mat drawModelComparison(const vector<EvaluationResult>& results,
+    const string& subtitle = "") {
     const int width = 950;
     const int height = 600;
     const int left = 90;
@@ -379,6 +564,11 @@ Mat drawModelComparison(const vector<EvaluationResult>& results) {
 
     putText(image, "Task 2 - Classifier Performance",
         Point(220, 35), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 2);
+
+    if (!subtitle.empty()) {
+        putText(image, subtitle,
+            Point(210, 55), FONT_HERSHEY_SIMPLEX, 0.45, Scalar(90, 90, 90), 1);
+    }
 
     int plotW = width - left - right;
     int plotH = height - top - bottom;
@@ -452,6 +642,197 @@ Mat drawModelComparison(const vector<EvaluationResult>& results) {
     return image;
 }
 
+// ============================================================================
+// Helper 7B: locate an image used by Task 1
+//
+// The CSV may store either a full path or only the filename. If only the
+// filename is stored, the program searches recursively inside Input (this
+// project's actual folder - contains "Red Signs", "Blue Signs", "Yellow
+// Signs" subfolders) so the images may remain wherever Task 1 organised them.
+// ============================================================================
+
+string findImagePath(const string& filename,
+    const string& searchRoot = "Input") {
+
+    fs::path originalPath(filename);
+
+    // First try the path exactly as written in the CSV.
+    if (fs::exists(originalPath) && fs::is_regular_file(originalPath))
+        return originalPath.string();
+
+    // If that does not work, search using only the filename.
+    string wantedName = originalPath.filename().string();
+
+    fs::path root(searchRoot);
+    if (!fs::exists(root))
+        return "";
+
+    try {
+        for (const auto& entry :
+            fs::recursive_directory_iterator(
+                root,
+                fs::directory_options::skip_permission_denied)) {
+
+            if (!entry.is_regular_file())
+                continue;
+
+            if (entry.path().filename().string() == wantedName)
+                return entry.path().string();
+        }
+    }
+    catch (...) {
+        return "";
+    }
+
+    return "";
+}
+
+// ============================================================================
+// Helper 7C: create one image showing the classification result
+//
+// Green text = the classifier predicted the correct traffic-sign type.
+// Red text   = the classifier predicted the wrong traffic-sign type.
+// The correct sign type is also shown so the prediction can be compared directly.
+// ============================================================================
+
+Mat drawIndividualPrediction(const Sample& sample,
+    const string& actualClass,
+    const string& knnClass,
+    const string& annClass,
+    const string& bayesClass) {
+
+    string imagePath = findImagePath(sample.filename);
+    Mat sourceImage;
+
+    if (!imagePath.empty())
+        sourceImage = imread(imagePath);
+
+    // If the original image cannot be found, still create a useful result
+    // window showing the filename and classifier predictions.
+    if (sourceImage.empty()) {
+        sourceImage = Mat(360, 640, CV_8UC3, Scalar(55, 55, 55));
+
+        putText(sourceImage,
+            "Image could not be found",
+            Point(120, 170),
+            FONT_HERSHEY_SIMPLEX,
+            0.8,
+            Scalar(255, 255, 255),
+            2);
+
+        putText(sourceImage,
+            sample.filename,
+            Point(40, 220),
+            FONT_HERSHEY_SIMPLEX,
+            0.5,
+            Scalar(220, 220, 220),
+            1);
+    }
+
+    // Resize very large images so the result window fits on the screen.
+    const int MAX_IMAGE_WIDTH = 850;
+    const int MAX_IMAGE_HEIGHT = 520;
+
+    double scaleX =
+        (double)MAX_IMAGE_WIDTH / sourceImage.cols;
+    double scaleY =
+        (double)MAX_IMAGE_HEIGHT / sourceImage.rows;
+
+    double scale = min(1.0, min(scaleX, scaleY));
+
+    Mat displayImage;
+    resize(sourceImage, displayImage, Size(),
+        scale, scale, INTER_AREA);
+
+    const int TEXT_AREA_HEIGHT = 230;
+    const int MIN_CANVAS_WIDTH = 1100;
+
+    int canvasWidth = max(MIN_CANVAS_WIDTH, displayImage.cols);
+    int canvasHeight = displayImage.rows + TEXT_AREA_HEIGHT;
+
+    Mat resultImage(
+        canvasHeight,
+        canvasWidth,
+        CV_8UC3,
+        Scalar(35, 35, 35));
+
+    // Centre the traffic-sign image horizontally.
+    int imageX = (canvasWidth - displayImage.cols) / 2;
+
+    displayImage.copyTo(
+        resultImage(
+            Rect(imageX, 0,
+                displayImage.cols,
+                displayImage.rows)));
+
+    int textY = displayImage.rows + 32;
+
+    Scalar white(255, 255, 255);
+    Scalar green(0, 220, 0);
+    Scalar red(0, 0, 255);
+    Scalar yellow(0, 255, 255);
+
+    string shownFilename =
+        fs::path(sample.filename).filename().string();
+
+    putText(resultImage,
+        "Image: " + shownFilename,
+        Point(20, textY),
+        FONT_HERSHEY_SIMPLEX,
+        0.60,
+        white,
+        1);
+
+    textY += 38;
+
+    putText(resultImage,
+        "Correct sign: " + actualClass,
+        Point(20, textY),
+        FONT_HERSHEY_SIMPLEX,
+        0.65,
+        yellow,
+        2);
+
+    textY += 42;
+
+    bool knnCorrect = (knnClass == actualClass);
+    bool annCorrect = (annClass == actualClass);
+    bool bayesCorrect = (bayesClass == actualClass);
+
+    putText(resultImage,
+        "KNN predicted: " + knnClass +
+        (knnCorrect ? "  - CORRECT" : "  - WRONG"),
+        Point(20, textY),
+        FONT_HERSHEY_SIMPLEX,
+        0.62,
+        knnCorrect ? green : red,
+        2);
+
+    textY += 38;
+
+    putText(resultImage,
+        "ANN predicted: " + annClass +
+        (annCorrect ? "  - CORRECT" : "  - WRONG"),
+        Point(20, textY),
+        FONT_HERSHEY_SIMPLEX,
+        0.62,
+        annCorrect ? green : red,
+        2);
+
+    textY += 38;
+
+    putText(resultImage,
+        "Naive Bayes predicted: " + bayesClass +
+        (bayesCorrect ? "  - CORRECT" : "  - WRONG"),
+        Point(20, textY),
+        FONT_HERSHEY_SIMPLEX,
+        0.62,
+        bayesCorrect ? green : red,
+        2);
+
+    return resultImage;
+}
+
 // Reads one column name per line - used to load the exact feature set the
 // Python side's SelectKBest chose (shared_selected_features.txt), so this
 // evaluation compares classifiers on identical information rather than
@@ -482,8 +863,9 @@ vector<string> readColumnList(const string& path) {
 // classifier-vs-classifier comparison, not a features-vs-features one.
 // ============================================================================
 
-void evaluateWithExternalTraining(const string& trainCsvPath, const string& testCsvPath) {
-    if (!std::filesystem::exists(trainCsvPath)) {
+void evaluateWithExternalTraining(const string& trainCsvPath, const string& testCsvPath,
+    Mat& outKnnCM, Mat& outAnnCM, Mat& outBayesCM, Mat& outComparison) {
+    if (!fs::exists(trainCsvPath)) {
         cout << "\nExternal-training evaluation skipped: " << trainCsvPath << " not found.\n";
         return;
     }
@@ -506,18 +888,47 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
         return;
     }
 
+    // Real sign-type labels, same file/philosophy as main()'s single-CSV
+    // evaluation and the Python side: run task2_combined.py first so
+    // sign_type_labels.csv already has every TSRD_external filename covered
+    // (it pre-fills those automatically). Some TSRD_external images have a
+    // SignID outside our mapped classes and are deliberately left blank
+    // there (same ones the Python side drops) - rather than hard-failing
+    // this optional comparison over that, drop those specific samples and
+    // continue with whatever is labelled. quiet=true because this is
+    // expected, not an error - main()'s single-CSV evaluation below still
+    // hard-fails with the full explanation if *our own 84* are unlabelled.
+    const string signTypeLabelPath = "sign_type_labels.csv";
+    size_t trainBefore = trainSamples.size(), testBefore = testSamples.size();
+    loadSignTypeLabels(signTypeLabelPath, trainSamples, /*quiet=*/true);
+    loadSignTypeLabels(signTypeLabelPath, testSamples, /*quiet=*/true);
+    trainSamples.erase(remove_if(trainSamples.begin(), trainSamples.end(),
+        [](const Sample& s) { return s.signType.empty(); }), trainSamples.end());
+    testSamples.erase(remove_if(testSamples.begin(), testSamples.end(),
+        [](const Sample& s) { return s.signType.empty(); }), testSamples.end());
+    if (trainBefore - trainSamples.size() > 0 || testBefore - testSamples.size() > 0)
+        cout << "\nDropped " << (trainBefore - trainSamples.size()) << " training + "
+             << (testBefore - testSamples.size()) << " test image(s) with no SignType "
+             << "in " << signTypeLabelPath << " (classes outside our mapped set - "
+             << "expected, matches the Python side's own exclusion).\n";
+    if (trainSamples.empty() || testSamples.empty()) {
+        cout << "\nExternal-training evaluation skipped: no samples with a "
+             << "SignType in " << signTypeLabelPath << ".\n";
+        return;
+    }
+
     cout << "\n================================================================\n";
     cout << "EXTERNAL-TRAINING EVALUATION (train on TSRD_external, test on our 84)\n";
     cout << "================================================================\n";
     cout << "Training images (external): " << trainSamples.size() << "\n";
     cout << "Test images (ours)        : " << testSamples.size() << "\n";
 
-    // Class universe = every SignID seen in either set, so a class that only
-    // appears in the test set (zero external examples) still gets a slot -
-    // it will simply always be misclassified, same as the Python side.
+    // Class universe = every sign type seen in either set, so a class that
+    // only appears in the test set (zero external examples) still gets a
+    // slot - it will simply always be misclassified, same as the Python side.
     set<string> classSet, trainClasses;
-    for (auto& s : trainSamples) { classSet.insert(s.signID); trainClasses.insert(s.signID); }
-    for (auto& s : testSamples) classSet.insert(s.signID);
+    for (auto& s : trainSamples) { classSet.insert(s.signType); trainClasses.insert(s.signType); }
+    for (auto& s : testSamples) classSet.insert(s.signType);
     vector<string> classNames(classSet.begin(), classSet.end());
     int numberOfClasses = (int)classNames.size();
     map<string, int> classToNumber;
@@ -532,7 +943,7 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
     Mat trainingData((int)trainSamples.size(), numFeatures, CV_32F);
     Mat trainingLabels((int)trainSamples.size(), 1, CV_32S);
     for (int r = 0; r < (int)trainSamples.size(); r++) {
-        trainingLabels.at<int>(r, 0) = classToNumber[trainSamples[r].signID];
+        trainingLabels.at<int>(r, 0) = classToNumber[trainSamples[r].signType];
         for (int c = 0; c < numFeatures; c++)
             trainingData.at<float>(r, c) = trainSamples[r].hog[c];
     }
@@ -540,7 +951,7 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
     Mat verificationData((int)testSamples.size(), numFeatures, CV_32F);
     Mat verificationLabels((int)testSamples.size(), 1, CV_32S);
     for (int r = 0; r < (int)testSamples.size(); r++) {
-        verificationLabels.at<int>(r, 0) = classToNumber[testSamples[r].signID];
+        verificationLabels.at<int>(r, 0) = classToNumber[testSamples[r].signType];
         for (int c = 0; c < numFeatures; c++)
             verificationData.at<float>(r, c) = testSamples[r].hog[c];
     }
@@ -549,10 +960,18 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
     normalizeTrainingData(trainingData, verificationData, mean, sigma);
 
     // ----- Train (identical setup to the single-CSV evaluation above) -----
+    // Progress messages below: with thousands of external training images,
+    // ANN backprop in particular can take several minutes in an unoptimized
+    // Debug build with zero visual feedback otherwise - easy to mistake for
+    // a hang. A Release build (cmake --build ... --config Release) trains
+    // much faster if this matters for repeated runs.
+    cout << "Training KNN...\n";
     Ptr<KNearest> knn = KNearest::create();
     knn->setIsClassifier(true);
     knn->setDefaultK(1);
     knn->train(trainingData, ROW_SAMPLE, trainingLabels);
+    cout << "Training ANN (this is the slow one - can take several minutes "
+         << "on " << trainingData.rows << " images in a Debug build)...\n";
 
     Mat annTrainingLabels = Mat::zeros(trainingData.rows, numberOfClasses, CV_32F);
     for (int r = 0; r < trainingLabels.rows; r++)
@@ -566,6 +985,7 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
     ann->setTermCriteria(TermCriteria(TermCriteria::MAX_ITER + TermCriteria::EPS, 2000, 1e-6));
     theRNG().state = 12345;
     ann->train(trainingData, ROW_SAMPLE, annTrainingLabels);
+    cout << "ANN trained. Training Naive Bayes...\n";
 
     // See NAIVE_BAYES_PCA_DIMS above - fit PCA on training data only (no
     // leakage), then project both train and test through it just for the
@@ -577,6 +997,7 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
 
     Ptr<NormalBayesClassifier> bayes = NormalBayesClassifier::create();
     bayes->train(trainingDataBayes, ROW_SAMPLE, trainingLabels);
+    cout << "All 3 classifiers trained. Predicting on the 84 test images...\n";
 
     // ----- Predict on the 84 (genuinely held out - never trained on) -----
     vector<int> truth, predKNN, predANN, predBayes;
@@ -595,6 +1016,45 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
 
         float bayesResponse = bayes->predict(verificationDataBayes.row(i));
         predBayes.push_back(cvRound(bayesResponse));
+    }
+
+    // Same per-image popup viewer as main()'s single-CSV mode (Section 9B),
+    // but over every one of the test images here - unlike that mode, this
+    // evaluation has no MIN_SAMPLES_PER_CLASS cutoff, so it covers all of
+    // them, not just the classes with >=3 examples.
+    fs::create_directories("task2_external_prediction_visualizations");
+    bool showExternalIndividualWindows = true;
+    for (int i = 0; i < (int)truth.size(); i++) {
+        const Sample& sample = testSamples[i];
+
+        Mat predictionView = drawIndividualPrediction(
+            sample,
+            classNames[truth[i]],
+            classNames[predKNN[i]],
+            classNames[predANN[i]],
+            classNames[predBayes[i]]
+        );
+
+        string outputName = fs::path(sample.filename).filename().string();
+        imwrite("task2_external_prediction_visualizations/Result_" + outputName, predictionView);
+
+        if (showExternalIndividualWindows) {
+            string windowName = "External Verification " + to_string(i + 1) +
+                " of " + to_string(truth.size());
+
+            imshow(windowName, predictionView);
+
+            cout << "\nShowing external verification image "
+                << i + 1 << " of " << truth.size() << endl;
+            cout << "Press any key for the next image." << endl;
+            cout << "Press ESC to stop individual-image display." << endl;
+
+            int key = waitKey(0);
+            destroyWindow(windowName);
+
+            if (key == 27)
+                showExternalIndividualWindows = false;
+        }
     }
 
     EvaluationResult knnResult = evaluateModel("KNN", truth, predKNN, numberOfClasses);
@@ -630,10 +1090,16 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
         }
     }
 
-    imwrite("task2_cpp_external_knn_confusion_matrix.png", drawConfusionMatrix(knnResult, classNames));
-    imwrite("task2_cpp_external_ann_confusion_matrix.png", drawConfusionMatrix(annResult, classNames));
-    imwrite("task2_cpp_external_bayes_confusion_matrix.png", drawConfusionMatrix(bayesResult, classNames));
-    imwrite("task2_cpp_external_classifier_comparison.png", drawModelComparison(allResults));
+    outKnnCM = drawConfusionMatrix(knnResult, classNames);
+    outAnnCM = drawConfusionMatrix(annResult, classNames);
+    outBayesCM = drawConfusionMatrix(bayesResult, classNames);
+    outComparison = drawModelComparison(allResults,
+        "Official result - trained on TSRD external dataset, tested on all 84 images");
+
+    imwrite("task2_cpp_external_knn_confusion_matrix.png", outKnnCM);
+    imwrite("task2_cpp_external_ann_confusion_matrix.png", outAnnCM);
+    imwrite("task2_cpp_external_bayes_confusion_matrix.png", outBayesCM);
+    imwrite("task2_cpp_external_classifier_comparison.png", outComparison);
 
     cout << "\nFiles written:\n"
          << "  task2_cpp_external_metrics.csv\n"
@@ -641,7 +1107,8 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
          << "  task2_cpp_external_knn_confusion_matrix.png\n"
          << "  task2_cpp_external_ann_confusion_matrix.png\n"
          << "  task2_cpp_external_bayes_confusion_matrix.png\n"
-         << "  task2_cpp_external_classifier_comparison.png\n";
+         << "  task2_cpp_external_classifier_comparison.png\n"
+         << "  task2_external_prediction_visualizations/Result_<filename>\n";
 }
 
 // ============================================================================
@@ -650,6 +1117,7 @@ void evaluateWithExternalTraining(const string& trainCsvPath, const string& test
 
 int main() {
     const string csvPath = "task1_combined_features.csv";
+    const string signTypeLabelPath = "sign_type_labels.csv";
 
     // We hold out one image per class for verification.
     // A class therefore needs at least 3 images so that Naive Bayes still has
@@ -670,23 +1138,31 @@ int main() {
     cout << "Task 1 CSV loaded successfully." << endl;
     cout << "Total images in CSV: " << samples.size() << endl;
 
+    // Load the REAL sign type for each image (see loadSignTypeLabels() /
+    // Helper 3B above for why SignID alone isn't the class).
+    if (!loadSignTypeLabels(signTypeLabelPath, samples))
+        return -1;
+
+    cout << "Traffic-sign type labels loaded successfully." << endl;
+
     // ========================================================================
     // Section 2: Select the best Task 1 feature
     //
-    // HOG is used because SignID recognition depends strongly on the inner
-    // symbol / digit / arrow of the traffic sign. Colour and outer shape are
-    // useful for segmentation, but many different SignIDs share them.
+    // HOG is used because traffic-sign recognition depends strongly on the
+    // inner symbol / digit / arrow of the traffic sign. Colour and outer
+    // shape are useful for segmentation, but different sign types can share
+    // them.
     // ========================================================================
 
     cout << "\nSelected feature for Task 2: HOG" << endl;
     cout << "Number of HOG features       : " << HOG_FEATURES << endl;
 
-    // Group the images according to SignID
+    // Group the images according to their REAL traffic-sign type.
     map<string, vector<int>> groupedRows;
     for (int i = 0; i < (int)samples.size(); i++)
-        groupedRows[samples[i].signID].push_back(i);
+        groupedRows[samples[i].signType].push_back(i);
 
-    cout << "Total SignID classes         : " << groupedRows.size() << endl;
+    cout << "Total sign type classes      : " << groupedRows.size() << endl;
 
     // ========================================================================
     // Section 3: Keep classes that can be evaluated fairly
@@ -699,7 +1175,7 @@ int main() {
     for (const auto& item : groupedRows) {
         if ((int)item.second.size() >= MIN_SAMPLES_PER_CLASS) {
             classNames.push_back(item.first);
-            cout << "  SignID " << item.first << " : " << item.second.size() << " images" << endl;
+            cout << "  " << item.first << " : " << item.second.size() << " images" << endl;
         }
     }
 
@@ -707,7 +1183,7 @@ int main() {
     cout << "(fewer than " << MIN_SAMPLES_PER_CLASS << " images):" << endl;
     for (const auto& item : groupedRows) {
         if ((int)item.second.size() < MIN_SAMPLES_PER_CLASS) {
-            cout << "  SignID " << item.first << " : " << item.second.size() << " image(s)" << endl;
+            cout << "  " << item.first << " : " << item.second.size() << " image(s)" << endl;
         }
     }
 
@@ -718,7 +1194,7 @@ int main() {
 
     int numberOfClasses = (int)classNames.size();
 
-    // Map the three-digit SignID to 0,1,2,... for OpenCV ML
+    // Map each real sign type to 0,1,2,... for OpenCV ML
     map<string, int> classToNumber;
     for (int i = 0; i < numberOfClasses; i++)
         classToNumber[classNames[i]] = i;
@@ -726,8 +1202,8 @@ int main() {
     // ========================================================================
     // Section 4: Set up training data and verification data
     //
-    // One image from every usable SignID is reserved for verification.
-    // The remaining images of that SignID are used for training.
+    // One image from every usable sign type is reserved for verification.
+    // The remaining images of that sign type are used for training.
     // A fixed random seed is used so that every classifier sees exactly the
     // same train/verification split every time the program is run.
     // ========================================================================
@@ -737,8 +1213,8 @@ int main() {
 
     mt19937 rng(42);
 
-    for (const string& signID : classNames) {
-        vector<int> rows = groupedRows[signID];
+    for (const string& signType : classNames) {
+        vector<int> rows = groupedRows[signType];
         shuffle(rows.begin(), rows.end(), rng);
 
         verificationRows.push_back(rows[0]);
@@ -754,7 +1230,7 @@ int main() {
 
     for (int r = 0; r < (int)trainingRows.size(); r++) {
         const Sample& s = samples[trainingRows[r]];
-        trainingLabels.at<int>(r, 0) = classToNumber[s.signID];
+        trainingLabels.at<int>(r, 0) = classToNumber[s.signType];
 
         for (int c = 0; c < HOG_FEATURES; c++)
             trainingData.at<float>(r, c) = s.hog[c];
@@ -762,7 +1238,7 @@ int main() {
 
     for (int r = 0; r < (int)verificationRows.size(); r++) {
         const Sample& s = samples[verificationRows[r]];
-        verificationLabels.at<int>(r, 0) = classToNumber[s.signID];
+        verificationLabels.at<int>(r, 0) = classToNumber[s.signType];
 
         for (int c = 0; c < HOG_FEATURES; c++)
             verificationData.at<float>(r, c) = s.hog[c];
@@ -834,12 +1310,12 @@ int main() {
     cout << "\nVerification results" << endl;
     cout << left
         << setw(26) << "Filename"
-        << setw(8) << "Truth"
-        << setw(8) << "KNN"
-        << setw(8) << "ANN"
-        << setw(8) << "Bayes"
+        << setw(28) << "Correct sign"
+        << setw(28) << "KNN"
+        << setw(28) << "ANN"
+        << setw(28) << "Bayes"
         << endl;
-    cout << string(58, '-') << endl;
+    cout << string(138, '-') << endl;
 
     for (int i = 0; i < verificationData.rows; i++) {
         int actual = verificationLabels.at<int>(i, 0);
@@ -869,11 +1345,72 @@ int main() {
 
         cout << left
             << setw(26) << sample.filename
-            << setw(8) << classNames[actual]
-            << setw(8) << classNames[knnClass]
-            << setw(8) << classNames[annClass]
-            << setw(8) << classNames[bayesClass]
+            << setw(28) << classNames[actual]
+            << setw(28) << classNames[knnClass]
+            << setw(28) << classNames[annClass]
+            << setw(28) << classNames[bayesClass]
             << endl;
+    }
+
+    // ========================================================================
+    // Section 9B: Show every verification image with classifier predictions
+    //
+    // Correct prediction = green text
+    // Wrong prediction   = red text
+    //
+    // The correct sign type is shown in yellow for comparison.
+    // Press any key to move to the next verification image.
+    // Press ESC to stop displaying individual images. The program will still
+    // continue calculating and showing the overall evaluation results.
+    // ========================================================================
+
+    fs::create_directories("task2_prediction_visualizations");
+
+    // Off by default: this is the internal 11-class subset, not the
+    // reported result (see drawModelComparison's subtitle below), so the
+    // program skips straight to the 84-image official evaluation's popups
+    // instead of pausing here first. Every image is still saved to
+    // task2_prediction_visualizations/ for the report either way.
+    bool showIndividualWindows = false;
+
+    for (int i = 0; i < (int)truth.size(); i++) {
+        const Sample& sample = samples[verificationRows[i]];
+
+        Mat predictionView = drawIndividualPrediction(
+            sample,
+            classNames[truth[i]],
+            classNames[predKNN[i]],
+            classNames[predANN[i]],
+            classNames[predBayes[i]]
+        );
+
+        // Save every annotated verification image for the report.
+        string outputName =
+            fs::path(sample.filename).filename().string();
+
+        imwrite(
+            "task2_prediction_visualizations/Result_" + outputName,
+            predictionView
+        );
+
+        if (showIndividualWindows) {
+            string windowName =
+                "Verification " + to_string(i + 1) +
+                " of " + to_string(truth.size());
+
+            imshow(windowName, predictionView);
+
+            cout << "\nShowing verification image "
+                << i + 1 << " of " << truth.size() << endl;
+            cout << "Press any key for the next image." << endl;
+            cout << "Press ESC to stop individual-image display." << endl;
+
+            int key = waitKey(0);
+            destroyWindow(windowName);
+
+            if (key == 27)
+                showIndividualWindows = false;
+        }
     }
 
     // ========================================================================
@@ -912,7 +1449,7 @@ int main() {
     for (const auto& r : allResults) {
         cout << "\n" << r.modelName << " - per-class results" << endl;
         cout << left
-            << setw(10) << "SignID"
+            << setw(30) << "Sign type"
             << setw(12) << "Precision"
             << setw(12) << "Recall"
             << setw(12) << "F1-score"
@@ -920,7 +1457,7 @@ int main() {
 
         for (int c = 0; c < numberOfClasses; c++) {
             cout << left
-                << setw(10) << classNames[c]
+                << setw(30) << classNames[c]
                 << setw(12) << r.classPrecision[c]
                 << setw(12) << r.classRecall[c]
                 << setw(12) << r.classF1[c]
@@ -966,17 +1503,13 @@ int main() {
     Mat knnCM = drawConfusionMatrix(knnResult, classNames);
     Mat annCM = drawConfusionMatrix(annResult, classNames);
     Mat bayesCM = drawConfusionMatrix(bayesResult, classNames);
-    Mat comparison = drawModelComparison(allResults);
+    Mat comparison = drawModelComparison(allResults,
+        "Internal subset only (11 classes, self-trained) - NOT the reported result");
 
     imwrite("task2_knn_confusion_matrix.png", knnCM);
     imwrite("task2_ann_confusion_matrix.png", annCM);
     imwrite("task2_bayes_confusion_matrix.png", bayesCM);
     imwrite("task2_classifier_comparison.png", comparison);
-
-    imshow("KNN Confusion Matrix", knnCM);
-    imshow("ANN Confusion Matrix", annCM);
-    imshow("Naive Bayes Confusion Matrix", bayesCM);
-    imshow("Classifier Comparison", comparison);
 
     cout << "\nFiles written:" << endl;
     cout << "  task2_classifier_metrics.csv" << endl;
@@ -985,12 +1518,36 @@ int main() {
     cout << "  task2_ann_confusion_matrix.png" << endl;
     cout << "  task2_bayes_confusion_matrix.png" << endl;
     cout << "  task2_classifier_comparison.png" << endl;
+    cout << "  task2_prediction_visualizations/Result_<filename>" << endl;
 
     // Second evaluation: same 3 classifiers, trained on TSRD_external instead
     // of the internal split above, tested on the same 84 project images the
     // Python side's Stage 0 uses - a genuine head-to-head between this
-    // file's classifiers and task2_combined.py's.
-    evaluateWithExternalTraining("TSRD_external/task1_combined_features.csv", csvPath);
+    // file's classifiers and task2_combined.py's. Runs BEFORE the windows
+    // below are shown (not after) - it can take a while, and a GUI window
+    // left open without a waitKey() to pump its messages shows as "Not
+    // Responding" in Windows for however long that takes, even though
+    // nothing is actually wrong. Showing the windows only once we're about
+    // to block on the real waitKey() avoids that.
+    Mat extKnnCM, extAnnCM, extBayesCM, extComparison;
+    evaluateWithExternalTraining("TSRD_external/task1_combined_features.csv", csvPath,
+        extKnnCM, extAnnCM, extBayesCM, extComparison);
+
+    // Show the official (external-training) result as the final windows -
+    // that is the number reported for the project, not the internal
+    // 11-class subset above. Fall back to the internal charts only if the
+    // external evaluation could not run (e.g. TSRD_external missing).
+    if (!extComparison.empty()) {
+        imshow("KNN Confusion Matrix (Official)", extKnnCM);
+        imshow("ANN Confusion Matrix (Official)", extAnnCM);
+        imshow("Naive Bayes Confusion Matrix (Official)", extBayesCM);
+        imshow("Classifier Comparison (Official)", extComparison);
+    } else {
+        imshow("KNN Confusion Matrix", knnCM);
+        imshow("ANN Confusion Matrix", annCM);
+        imshow("Naive Bayes Confusion Matrix", bayesCM);
+        imshow("Classifier Comparison", comparison);
+    }
 
     cout << "\nPress any key on an OpenCV window to finish." << endl;
     waitKey(0);

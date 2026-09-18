@@ -89,8 +89,18 @@ INPUT_ROOT = os.path.join(PROJECT_ROOT, "Input")  # contains colour folders
 INPUT_FILES_PATH = os.path.join(PROJECT_ROOT, "inputFiles.txt")
 RESULTS_DIR = PROJECT_ROOT
 SHARED_FEATURES_PATH = os.path.join(PROJECT_ROOT, "shared_selected_features.txt")
+SIGN_TYPE_LABELS_PATH = os.path.join(PROJECT_ROOT, "sign_type_labels.csv")
 WAIT_FOR_KEYPRESS = True      # False = auto-advance the demo window after a short delay
 
+# Seed data only - used once to pre-fill sign_type_labels.csv (see
+# ensure_sign_type_labels() below) the first time it's generated for a given
+# image, never consulted directly for classification afterward. That file,
+# not this dict, is the actual source of truth shared with the C++ side
+# (task2_classifiers.cpp's loadSignTypeLabels()) - editing a SignType there
+# (e.g. merging two SignIDs that turn out to be the same real sign) takes
+# effect on both halves of Task 2 without touching this file.
+# NOTE: values must never contain a comma - task2_classifiers.cpp's CSV
+# parser is not quote-aware, so a literal comma would corrupt that row.
 ID_LABEL = {
     "000": "Speed limit 5", "001": "Speed limit 15", "002": "Speed limit 30",
     "003": "Speed limit 40", "004": "Speed limit 50", "005": "Speed limit 60",
@@ -100,7 +110,7 @@ ID_LABEL = {
     "017": "No horn", "033": "Traffic signals ahead", "052": "Stop",
     "055": "No entry", "056": "Yield", "057": "No entry (checkpoint)",
     "020": "Straight or right only", "021": "Straight ahead only", "022": "Left turn only",
-    "023": "Straight, left or right only", "024": "Right turn only", "026": "Keep right",
+    "023": "Straight/left/right only", "024": "Right turn only", "026": "Keep right",
     "027": "Roundabout", "028": "Cars only", "029": "Sound horn",
     "030": "Cyclist route", "031": "U-turn ahead",
     "032": "Junction/road merge ahead", "034": "General hazard", "035": "Pedestrian crossing",
@@ -207,14 +217,60 @@ def read_input_file_list(list_path=INPUT_FILES_PATH):
     return names
 
 
+def ensure_sign_type_labels():
+    """Keep sign_type_labels.csv (Filename,SignID,SignType) complete: any
+    filename from our own CSV or the external pool that isn't in it yet gets
+    a new row, pre-filled from ID_LABEL - so it starts usable immediately
+    instead of requiring 4,600+ external images to be labelled by hand, and
+    newly added images (e.g. via the inputFiles.txt extensibility path) are
+    picked up automatically on the next run. Rows already present - including
+    any manual edits, such as merging two SignIDs that turn out to be the
+    same real sign type - are left untouched. Same file format
+    task2_classifiers.cpp's loadSignTypeLabels() reads, so it's one shared,
+    editable source of truth for class labels across both halves of Task 2."""
+    existing = {}
+    if os.path.exists(SIGN_TYPE_LABELS_PATH):
+        prev = pd.read_csv(SIGN_TYPE_LABELS_PATH, dtype=str, keep_default_na=False)
+        existing = {row["Filename"]: (row["SignID"], row["SignType"]) for _, row in prev.iterrows()}
+
+    added = 0
+    for csv_path in (CSV_PATH, EXTERNAL_CSV_PATH):
+        if not os.path.exists(csv_path):
+            continue
+        raw = pd.read_csv(csv_path, dtype={"SignID": str})
+        raw["SignID"] = raw["SignID"].str.zfill(3)
+        for _, r in raw.iterrows():
+            fname = r["Filename"]
+            if fname in existing:
+                continue
+            existing[fname] = (r["SignID"], ID_LABEL.get(r["SignID"], ""))
+            added += 1
+
+    if added or not os.path.exists(SIGN_TYPE_LABELS_PATH):
+        out = pd.DataFrame(
+            [{"Filename": f, "SignID": sid, "SignType": st} for f, (sid, st) in existing.items()]
+        )
+        out.to_csv(SIGN_TYPE_LABELS_PATH, index=False)
+        if added:
+            print(f"sign_type_labels.csv: added {added} new row(s), pre-filled from ID_LABEL.")
+
+
+def load_sign_type_labels():
+    ensure_sign_type_labels()
+    df = pd.read_csv(SIGN_TYPE_LABELS_PATH, dtype=str, keep_default_na=False)
+    return dict(zip(df["Filename"], df["SignType"]))
+
+
 def load_data():
+    sign_types = load_sign_type_labels()
     df = pd.read_csv(CSV_PATH, dtype={"SignID": str})
     df["SignID"] = df["SignID"].str.zfill(3)
-    df["Label"] = df["SignID"].map(ID_LABEL)
+    df["Label"] = df["Filename"].map(sign_types).replace("", np.nan)
     missing = df[df["Label"].isna()]
     if len(missing):
-        print(f"WARNING: dropping {len(missing)} row(s) with unmapped SignIDs "
-              f"(add them to ID_LABEL to include): {sorted(missing['SignID'].unique())}")
+        print(f"WARNING: dropping {len(missing)} row(s) with no SignType in "
+              f"sign_type_labels.csv (fill it in and rerun to include): "
+              f"{sorted(missing['SignID'].unique())}")
         df = df[df["Label"].notna()].reset_index(drop=True)
 
     if os.path.exists(PARENT_MAP_PATH):
@@ -239,16 +295,18 @@ def load_data():
 def load_external_data():
     """External training pool: real TSRD photos (github.com/17Hieng/Chinese-
     Traffic-Sign-Classiffication-CNN mirror of nlpr.ia.ac.cn/pal/trafficdata/
-    recognition.html), same 000-057 class coding as ID_LABEL. Filtered to
-    perceptual-hash distance > 12 from every one of our 84 originals, so
-    there is zero image overlap with the Stage 0 test set."""
+    recognition.html), same 000-057 class coding as ID_LABEL originally used
+    to seed their SignType. Filtered to perceptual-hash distance > 12 from
+    every one of our 84 originals, so there is zero image overlap with the
+    Stage 0 test set."""
+    sign_types = load_sign_type_labels()
     df = pd.read_csv(EXTERNAL_CSV_PATH, dtype={"SignID": str})
     df["SignID"] = df["SignID"].str.zfill(3)
-    df["Label"] = df["SignID"].map(ID_LABEL)
+    df["Label"] = df["Filename"].map(sign_types).replace("", np.nan)
     missing = df[df["Label"].isna()]
     if len(missing):
-        print(f"External: dropping {len(missing)} row(s) with SignIDs outside our "
-              f"48 classes: {sorted(missing['SignID'].unique())}")
+        print(f"External: dropping {len(missing)} row(s) with no SignType in "
+              f"sign_type_labels.csv: {sorted(missing['SignID'].unique())}")
         df = df[df["Label"].notna()].reset_index(drop=True)
 
     for c in FEAT_COLS:
@@ -330,7 +388,7 @@ def run_external_evaluation(df):
         save_confusion_matrix(y_test, y_pred, f"Stage 0 (external training) - {name}",
                                os.path.join(RESULTS_DIR, f"task2_external_confusion_{sanitize_filename(name)}.png"))
 
-    save_classifier_comparison(results, "Stage 0 - Classifier Comparison (trained on external TSRD data)",
+    save_classifier_comparison(results, "Official result - trained on external TSRD data, tested on all 84 images",
                                 os.path.join(RESULTS_DIR, "task2_external_classifier_comparison.png"))
 
     per_class_df = pd.DataFrame({
@@ -411,7 +469,7 @@ def run_evaluation(df):
         save_confusion_matrix(y_orig, y_pred, f"Stage 1 (LOO-CV) - {name}",
                                os.path.join(RESULTS_DIR, f"task2_confusion_{sanitize_filename(name)}.png"))
 
-    save_classifier_comparison(results, "Stage 1 - Classifier Comparison (Leave-One-Out CV, 84 images only)",
+    save_classifier_comparison(results, "Stage 1 - Internal baseline only (LOO-CV, 84 images) - NOT the reported result",
                                 os.path.join(RESULTS_DIR, "task2_py_classifier_comparison.png"))
 
     per_class_df = pd.DataFrame({

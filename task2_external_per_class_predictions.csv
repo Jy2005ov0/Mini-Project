@@ -36,10 +36,10 @@ Filename,SignID,TrueLabel,PredictedLabel,Correct
 021_0004.png,021,Straight ahead only,Straight ahead only,True
 021_0004_j.png,021,Straight ahead only,Straight ahead only,True
 022_0005.png,022,Left turn only,Left turn only,True
-023_1_0002_1_j.png,023,"Straight, left or right only","Straight, left or right only",True
-023_1_0003.png,023,"Straight, left or right only","Straight, left or right only",True
-023_1_0004.png,023,"Straight, left or right only","Straight, left or right only",True
-023_1_0005.png,023,"Straight, left or right only","Straight, left or right only",True
+023_1_0002_1_j.png,023,Straight/left/right only,Straight/left/right only,True
+023_1_0003.png,023,Straight/left/right only,Straight/left/right only,True
+023_1_0004.png,023,Straight/left/right only,Straight/left/right only,True
+023_1_0005.png,023,Straight/left/right only,Straight/left/right only,True
 024_1_0016.png,024,Right turn only,Right turn only,True
 024_1_0017.png,024,Right turn only,Right turn only,True
 026_1_0016.png,026,Keep right,Keep right,True

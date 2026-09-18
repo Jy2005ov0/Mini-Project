@@ -8,12 +8,16 @@
 		<Platform Name="x64"/>
 	</Configurations>
 	<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e48948cd-254e-3762-af90-3be4b06c1543" DefaultStartup="true">
+		<BuildDependency Project="Task2Classifiers.vcxproj"/>
 		<BuildDependency Project="Task2Demo.vcxproj"/>
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
 		<Build Solution="Debug|*" Project="false"/>
 		<Build Solution="Release|*" Project="false"/>
 		<Build Solution="MinSizeRel|*" Project="false"/>
 		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="Task2Classifiers.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="8a475606-d9d4-3061-a287-b7ed01855d68">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
 	</Project>
 	<Project Path="Task2Demo.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="c4639952-10a0-39de-aab5-a2b0d3c26dab">
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>

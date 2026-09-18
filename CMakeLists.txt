@@ -8,3 +8,6 @@ find_package(OpenCV REQUIRED)
 
 add_executable(Task2Demo combined_task1.cpp)
 target_link_libraries(Task2Demo PRIVATE ${OpenCV_LIBS})
+
+add_executable(Task2Classifiers task2_classifiers.cpp)
+target_link_libraries(Task2Classifiers PRIVATE ${OpenCV_LIBS})
